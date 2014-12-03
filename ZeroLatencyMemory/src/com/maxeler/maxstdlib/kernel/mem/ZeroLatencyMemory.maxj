@@ -1,0 +1,122 @@
+package com.maxeler.maxstdlib.kernel.mem;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelFinalizer;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+/**
+ * This memory implementation allows the write() arguments to depend on read() without any stream offset.
+ * Data written with write() can be read() immediately on the following cycle.
+ *
+ * NB: The data written in must be calculated within a single cycle.
+ *
+ * @author Chris Jones
+ */
+public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib implements KernelFinalizer {
+	private static final int LOOP_LATENCY = 3;
+
+	private final Memory<T> ram;
+	private final DFEVar cycle;
+	private final DFEVar writeAddress;
+	private final DFEVar writeEnable;
+	private final T dataIn;
+
+	private final Map<DFEVar, T> reads;
+
+	private boolean hasWritten;
+
+	private ZeroLatencyMemory(KernelLib owner, KernelType<T> type, int depth) {
+		super(owner);
+
+		writeAddress = dfeUInt(MathUtils.bitsToAddress(depth)).newInstance(this);
+		writeEnable  = dfeBool().newInstance(this);
+		dataIn       = type.newInstance(this);
+		hasWritten   = false;
+
+		ram = mem.alloc(type, depth);
+
+		Count.Params params =
+			control.count.makeParams(MathUtils.bitsToRepresent(LOOP_LATENCY))
+		                 .withWrapMode(WrapMode.STOP_AT_MAX)
+		                 .withMax(LOOP_LATENCY);
+
+		cycle = control.count.makeCounter(params).getCount();
+
+		reads = new LinkedHashMap<DFEVar, T>();
+
+		getKernel().addKernelFinalizer(this);
+	}
+
+	public static <T extends KernelObject<T>> ZeroLatencyMemory<T> alloc(KernelLib owner, KernelType<T> type, int depth) {
+		return new ZeroLatencyMemory<T>(owner, type, depth);
+	}
+
+	public T read(DFEVar address) {
+		// don't duplicate logic (or more importantly RAMs) for repeat reads at same address
+		if (reads.containsKey(address))
+			return reads.get(address);
+
+		// default is to read from RAM
+		List<T> values = new ArrayList<T>();
+		values.add(ram.read(address));
+
+		for (int n = 1; n <= LOOP_LATENCY; ++n)
+			values.add(stream.offset(dataIn, -n));
+
+		DFEVar select = constant.zero(dfeUInt(MathUtils.bitsToRepresent(LOOP_LATENCY)));
+
+		// compare addresses oldest to newest, as we want to find the most recent match
+		for (int n = LOOP_LATENCY; n >= 1; --n) {
+			optimization.pushPipeliningFactor(0);
+			DFEVar addressMatch = optimization.pipeline(cycle >= n)
+			                    & optimization.pipeline(address === stream.offset(writeAddress, -n))
+			                    & stream.offset(writeEnable, -n);
+			select = addressMatch ? n : select;
+			optimization.popPipeliningFactor();
+		}
+
+		optimization.pushPipeliningFactor(0);
+		T dataOut = control.mux(optimization.pipeline(select), values);
+		optimization.popPipeliningFactor();
+
+		reads.put(address, dataOut);
+		return dataOut;
+	}
+
+	public void write(DFEVar address, T data, DFEVar enable) {
+		if (hasWritten) throw new MaxCompilerAPIError("write() may only be called once");
+
+		DFEVar address_ = stream.offset(address, -LOOP_LATENCY);
+		DFEVar enable_  = stream.offset(enable , -LOOP_LATENCY) & (cycle >= LOOP_LATENCY);
+		T      data_    = stream.offset(data   , -LOOP_LATENCY);
+
+		ram.write(address_, data_, enable_);
+
+		writeAddress <== address;
+		writeEnable  <== enable;
+		dataIn       <== data;
+		hasWritten    =  true;
+	}
+
+	public void mapToCPU(String name) {
+		ram.mapToCPU(name);
+	}
+
+	@Override
+	public void finalizeKernel(Kernel kernel_design) {
+		if (!hasWritten) throw new MaxCompilerAPIError("write() not called");
+	}
+}
