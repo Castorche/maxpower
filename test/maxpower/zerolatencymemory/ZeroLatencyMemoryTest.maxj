@@ -1,4 +1,4 @@
-package com.maxeler.maxstdlib.kernel.mem;
+package maxpower.zerolatencymemory;
 
 import static org.junit.Assert.assertArrayEquals;
 
@@ -12,7 +12,6 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
-import com.maxeler.maxstdlib.kernel.mem.ZeroLatencyMemory;
 
 public class ZeroLatencyMemoryTest {
 	private static final int DEPTH = 4;

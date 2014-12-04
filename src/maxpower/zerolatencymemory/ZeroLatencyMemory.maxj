@@ -1,4 +1,4 @@
-package com.maxeler.maxstdlib.kernel.mem;
+package maxpower.zerolatencymemory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
