@@ -1,0 +1,23 @@
+package maxpower.roundrobin;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+
+public class RoundRobin<T extends KernelObject<T>> extends Kernel {
+	public RoundRobin(KernelParameters parameters, KernelType<T> wordType, int nOutputs, int nWords) {
+		super(parameters);
+
+		CounterChain cc = control.count.makeCounterChain();
+		DFEVar output = cc.addCounter(nOutputs, 1);
+		if (nWords > 1) cc.addCounter(nWords, 1);
+
+		T din = io.input("din", wordType);
+
+		for (int n = 0; n < nOutputs; ++n)
+			io.output("dout"+n, wordType, output === n) <== din;
+	}
+}

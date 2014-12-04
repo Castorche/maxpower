@@ -1,0 +1,5 @@
+package maxpower.ops;
+
+public interface BinaryOp<R, T1, T2> {
+	R op(T1 a, T2 b);
+};

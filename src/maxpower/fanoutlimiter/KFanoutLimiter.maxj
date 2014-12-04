@@ -1,0 +1,61 @@
+package maxpower.fanoutlimiter;
+
+import java.util.ArrayList;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelFinalizer;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+
+/**
+ * Create tree of pipelined values to limit the fanout of a KernelObject to a
+ * maximum specified value.
+ *
+ * The construction of the tree is achieved in the KernelFinalizer.
+ */
+public class KFanoutLimiter<T extends KernelObject<T>> extends KernelLib implements KernelFinalizer{
+
+	private final T x;
+	private final int max;
+
+	ArrayList<T> requested = new ArrayList<T>();
+
+	public T get() {
+		requested.add(x.getType().newInstance(this));
+		return requested.get(requested.size()-1);
+	}
+
+	public KFanoutLimiter(KernelLib owner, T x, int maxFanout) {
+		super(owner);
+		if(maxFanout < 2) {
+			throw new RuntimeException("Sorry, maxFanout should be 2 at least, not " + maxFanout);
+		}
+		this.x = x;
+		max = maxFanout;
+		owner.getKernel().addKernelFinalizer(this);
+	}
+
+	@Override
+	public void finalizeKernel(Kernel kernelDesign) {
+		ArrayList<T> current = new ArrayList<T>(max);
+		for(int f = 0; f < max; ++f) {
+			current.add(x);
+		}
+
+		while(current.size() < requested.size()) {
+			ArrayList<T> next = new ArrayList<T>(current.size()*max);
+			for(T h : current) {
+				T v = optimization.pipeline(h);
+				for(int f = 0; f < max; ++f) {
+					next.add(v);
+				}
+			}
+			current = next;
+		}
+
+		for(int i = 0; i < requested.size(); ++i) {
+			requested[i] <== current[i];
+		}
+	}
+
+}
