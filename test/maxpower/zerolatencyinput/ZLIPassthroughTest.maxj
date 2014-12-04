@@ -1,0 +1,80 @@
+package maxpower.zerolatencyinput;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager;
+import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager.DualSimMode;
+
+// TODO JUnit
+public class ZLIPassthroughTest {
+	private static final int N = 10000; // length of test input data
+
+	static class ZLIPassthroughTestKernel extends Kernel {
+
+		protected ZLIPassthroughTestKernel(KernelParameters parameters) {
+			super(parameters);
+
+			DFEType intType = DFETypeFactory.dfeInt(32);
+
+			DFEVar enable = io.input("enable", dfeBool());
+
+			DFEVar std_in = io.input("std_in", intType, enable);
+			DFEVar zli_in = ZeroLatencyInput.input("zli_in", intType, enable);
+
+			// input is undefined until first enable
+			DFEVar hasRead = Reductions.streamHold(constant.var(true), enable);
+
+			io.output("std_out", intType, hasRead) <== std_in;
+			io.output("zli_out", intType, hasRead) <== zli_in;
+		}
+	}
+
+	public static void main(String[] args) {
+		_DualSimulationManager m = new _DualSimulationManager("ZLIPassthroughTest", DualSimMode.PARALLEL);
+
+		m.setKernels(new ZLIPassthroughTestKernel(m.makeKernelParameters_A()),
+			new ZLIPassthroughTestKernel(m.makeKernelParameters_B()));
+
+		Random rng = new Random(1234);
+
+		double[] input = new double[N];
+		for (int i = 0; i < N; ++i)
+			input[i] = rng.nextInt(100)+1;
+
+		List<Double> enable = new ArrayList<Double>(2*N);
+		int trueCount = 0;
+		while (trueCount < N) {
+			boolean enableVal = rng.nextBoolean();
+			enable.add(enableVal ? 1. : 0.);
+			if (enableVal) ++trueCount;
+		}
+
+		m.setInputData("std_in", input);
+		m.setInputData("zli_in", input);
+		m.setInputData("enable", enable);
+
+		m.setScalarInput("zli_in_ZLI_inputLength", N);
+
+		m.setKernelCycles(enable.size());
+
+		m.runTest();
+
+		double[] std_out = m.getOutputDataArray("std_out");
+//		double[] zli_out = m.getOutputDataArray("zli_out");
+//
+//		for (int i = 0; i < std_out.length; ++i)
+//			m.logMsg("std: %d, zli: %d\n", (int)std_out[i], (int)zli_out[i]);
+
+		m.checkOutputData("zli_out", std_out);
+
+		m.logMsg("Test PASSED");
+	}
+}

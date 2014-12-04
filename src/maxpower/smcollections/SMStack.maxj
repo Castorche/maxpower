@@ -1,0 +1,149 @@
+package maxpower.smcollections;
+
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+/**
+ * An implementation of a stack for use within state machines, built upon SMArrayList.
+ *
+ * The top of the stack is at index 0.
+ *
+ * The push, pop and peek methods make usage more idiomatic. It is recommended
+ * that these not be combined with add / remove.
+ *
+ * It is the responsibility of the user to ensure that only one method affecting
+ * state (push, pop, clean) is called on any given cycle. Otherwise, the resulting
+ * state will be inconsistent.
+ *
+ * @author Chris Jones
+ */
+public class SMStack extends StateMachineLib {
+	private final SMArrayList impl;
+
+	/**
+	 * Constructs a new state machine stack.
+	 *
+	 * @param owner the containing state machine library
+	 * @param type the contained type
+	 * @param capacity the maximum depth of the stack
+	 */
+	public SMStack(StateMachineLib owner, DFEsmValueType type, int capacity) {
+		super(owner);
+		impl = new SMArrayList(owner, type, capacity);
+	}
+
+	/**
+	 * Add a value to the top of the stack.
+	 *
+	 * @param val the value to be added
+	 */
+	public void push(DFEsmValue val) {
+		impl.add(0, val);
+	}
+
+	/**
+	 * Remove the value at the top of the stack.
+	 *
+	 * @return the value being removed
+	 */
+	public DFEsmValue pop() {
+		return impl.remove(0);
+	}
+
+	/**
+	 * Remove the specified number of values from the top of the stack.
+	 *
+	 * @param numPops the number of values to be removed
+	 */
+	public void pop(int numPops) {
+		pop(constant.value(dfeUInt(MathUtils.bitsToRepresent(capacity())), numPops));
+	}
+
+	/**
+	 * Remove the specified number of values from the top of the stack.
+	 *
+	 * @param numPops the number of values to be removed
+	 */
+	public void pop(DFEsmValue numPops) {
+		pop(numPops, capacity());
+	}
+
+	/**
+	 * Remove the specified number of values from the top of the stack.
+	 *
+	 * @param numPops the number of values to be removed
+	 * @param maxPops the maximum number of values which can be removed
+	 */
+	public void pop(DFEsmValue numPops, int maxPops) {
+		impl.size.next <== impl.size - numPops;
+
+		_SWITCH(numPops);
+			for (int n = 0; n <= maxPops; ++n) {
+				_CASE(n); {
+					for (int i = 0; i < capacity()-n; ++i) {
+						impl.data[i].next <== impl.data[i+n];
+					}
+				}
+			}
+		_END_SWITCH();
+	}
+
+	/**
+	 * @return the value at the top of the stack
+	 */
+	public DFEsmValue peek() {
+		return get(0);
+	}
+
+	/**
+	 * Reset the size to zero.
+	 */
+	public void clear() {
+		impl.clear();
+	}
+
+	/**
+	 * @return the value at given index
+	 */
+	public DFEsmStateValue get(int idx) {
+		return impl.get(idx);
+	}
+
+	/**
+	 * @return the value at given index
+	 */
+	public DFEsmValue get(DFEsmValue idx) {
+		return impl.get(idx);
+	}
+
+	/**
+	 * @return the number of values contained
+	 */
+	public DFEsmValue size() {
+		return impl.size();
+	}
+
+	/**
+	 * @return the maximum number of values which can be contained
+	 */
+	public int capacity() {
+		return impl.capacity();
+	}
+
+	/**
+	 * @return <tt>true</tt> if no values are contained
+	 */
+	public DFEsmValue isEmpty() {
+		return impl.isEmpty();
+	}
+
+	/**
+	 * @return <tt>true</tt> if full to capacity
+	 */
+	public DFEsmValue isFull() {
+		return impl.isFull();
+	}
+}
