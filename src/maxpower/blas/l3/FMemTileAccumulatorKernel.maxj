@@ -1,0 +1,44 @@
+package maxpower.blas.l3;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+
+public class FMemTileAccumulatorKernel extends Kernel {
+	public static final String INPUT_NAME_PREFIX = "din";
+	public static final String OUTPUT_NAME = "dout";
+
+	public FMemTileAccumulatorKernel(KernelParameters parameters, DFEType type, int tileSize2D, int nInputs) {
+		super(parameters);
+
+		DFEVar sumTiles = io.scalarInput("sumTiles", dfeUInt(32));
+
+		List<DFEVar> inputs = new ArrayList<DFEVar>();
+		for (int i = 0; i < nInputs; ++i)
+			inputs.add(io.input(INPUT_NAME_PREFIX+i, type));
+
+		FMemTileAccumulator ta = new FMemTileAccumulator(tileSize2D, sumTiles, constant.var(true), inputs);
+
+		io.output(OUTPUT_NAME, type, ta.getOutputEnable()) <== ta.getOutput();
+	}
+
+	public static DFELink accumulateTiles(CustomManager manager, String name, DFEType type, int tileSize2D, DFELink... inputs) {
+		return accumulateTiles(manager, name, type, tileSize2D, Arrays.asList(inputs));
+	}
+
+	public static DFELink accumulateTiles(CustomManager manager, String name, DFEType type, int tileSize2D, List<DFELink> inputs) {
+		KernelBlock ta = manager.addKernel(new FMemTileAccumulatorKernel(manager.makeKernelParameters(name), type, tileSize2D, inputs.size()));
+		for (int i = 0; i < inputs.size(); ++i) {
+			ta.getInput(INPUT_NAME_PREFIX+i) <== inputs[i];
+		}
+		return ta.getOutput(OUTPUT_NAME);
+	}
+}

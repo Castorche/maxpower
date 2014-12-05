@@ -6,8 +6,14 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
 
 public class RoundRobin<T extends KernelObject<T>> extends Kernel {
+	public static final String INPUT_NAME = "din";
+	public static final String OUTPUT_NAME_PREFIX = "dout";
+
 	public RoundRobin(KernelParameters parameters, KernelType<T> wordType, int nOutputs, int nWords) {
 		super(parameters);
 
@@ -15,9 +21,20 @@ public class RoundRobin<T extends KernelObject<T>> extends Kernel {
 		DFEVar output = cc.addCounter(nOutputs, 1);
 		if (nWords > 1) cc.addCounter(nWords, 1);
 
-		T din = io.input("din", wordType);
+		T din = io.input(INPUT_NAME, wordType);
 
-		for (int n = 0; n < nOutputs; ++n)
-			io.output("dout"+n, wordType, output === n) <== din;
+		for (int i = 0; i < nOutputs; ++i)
+			io.output(OUTPUT_NAME_PREFIX+i, wordType, output === i) <== din;
+	}
+
+	public static <T extends KernelObject<T>>
+	DFELink[] roundRobin(CustomManager manager, String name, KernelType<T> wordType, int nOutputs, int nWords, DFELink input) {
+		DFELink[] output = new DFELink[nOutputs];
+		KernelBlock rr = manager.addKernel(new RoundRobin<T>(manager.makeKernelParameters(name), wordType, nOutputs, nWords));
+		rr.getInput(INPUT_NAME) <== input;
+		for (int i = 0; i < nOutputs; ++i) {
+			output[i] = rr.getOutput(OUTPUT_NAME_PREFIX+i);
+		}
+		return output;
 	}
 }

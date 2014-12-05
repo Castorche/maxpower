@@ -1,0 +1,52 @@
+package maxpower.blas.l3;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import maxpower.fpmultiadder.FloatingPointMultiAdder;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+
+public abstract class TileAccumulator extends KernelLib {
+	protected final int tileSize2D;
+	protected final DFEVar inputValid;
+
+	protected final DFEVar tile;
+	protected final DFEVar pos;
+	protected final DFEVar sum;
+	protected final DFEVar sumValid;
+
+	protected TileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, List<DFEVar> inputs) {
+		super(inputs[0].getKernel());
+
+		this.tileSize2D = tileSize2D;
+		this.inputValid = inputValid;
+
+		CounterChain cc = control.count.makeCounterChain(inputValid);
+		tile = cc.addCounter(sumTiles, 1);
+		pos  = cc.addCounter(tileSize2D, 1);
+
+		sum = inputs[0].getType().newInstance(this);
+
+		List<DFEVar> summands = new ArrayList<DFEVar>();
+		summands.add((tile === 0) ? 0 : getSumCarry());
+		summands.addAll(inputs);
+
+		FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
+		sum <== adder.compute(summands.toArray(new DFEVar[0]));
+
+		sumValid = (tile === (sumTiles-1));
+	}
+
+	protected abstract DFEVar getSumCarry();
+
+	public DFEVar getOutput() {
+		return sum;
+	}
+
+	public DFEVar getOutputEnable() {
+		return sumValid;
+	}
+}

@@ -1,0 +1,49 @@
+package maxpower.blas.l3;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+
+public class TileMultiplierKernel extends Kernel {
+	public static final String INPUT_A_NAME = "A";
+	public static final String INPUT_B_NAME = "B";
+	public static final String OUTPUT_NAME  = "C";
+
+	/*
+	 * A tile: M rows by N cols
+	 * B tile: N rows by M cols
+	 *
+	 * where M >= N
+	 *
+	 * Output: M by M
+	 */
+	public TileMultiplierKernel(KernelParameters parameters, DFEType type, int M, int N) {
+		super(parameters);
+
+		if (M < N)
+			throw new RuntimeException("M must be greater than, or equal to, N");
+
+		DFEVar numTiles = io.scalarInput("numTiles", dfeUInt(32));
+
+		DFEVar aIn = type.newInstance(this);
+		DFEVar bIn = type.newInstance(this);
+
+		TileMultiplier tm = new TileMultiplier(M, N, numTiles, aIn, bIn);
+
+		aIn <== io.input(INPUT_A_NAME, type, tm.getInputEnableA());
+		bIn <== io.input(INPUT_B_NAME, type, tm.getInputEnableB());
+
+		io.output(OUTPUT_NAME, type, tm.getOutputEnable()) <== tm.getOutput();
+	}
+
+	public static DFELink multiplyTiles(CustomManager manager, String name, DFEType type, int M, int N, DFELink a, DFELink b) {
+		KernelBlock block = manager.addKernel(new TileMultiplierKernel(manager.makeKernelParameters(name), type, M, N));
+		block.getInput(INPUT_A_NAME) <== a;
+		block.getInput(INPUT_B_NAME) <== b;
+		return block.getOutput(OUTPUT_NAME);
+	}
+}

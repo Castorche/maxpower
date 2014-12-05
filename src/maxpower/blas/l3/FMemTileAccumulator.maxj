@@ -1,0 +1,29 @@
+package maxpower.blas.l3;
+
+import java.util.Arrays;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+
+public class FMemTileAccumulator extends TileAccumulator {
+	public FMemTileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, DFEVar... inputs) {
+		this(tileSize2D, sumTiles, inputValid, Arrays.asList(inputs));
+	}
+
+	public FMemTileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, List<DFEVar> inputs) {
+		super(tileSize2D, sumTiles, inputValid, inputs);
+	}
+
+	private static int i = 0;
+
+	@Override
+	protected DFEVar getSumCarry() {
+		OffsetExpr latency = stream.makeOffsetAutoLoop("TileAccOffset"+i++, 1, tileSize2D);
+		Memory<DFEVar> ram = mem.alloc(sum.getType(), tileSize2D);
+		// these negative offsets are safe, as we don't care about first tileSize2D cycles
+		ram.write(stream.offset(pos, -latency), stream.offset(sum, -latency), stream.offset(inputValid, -latency));
+		return ram.read(pos);
+	}
+}

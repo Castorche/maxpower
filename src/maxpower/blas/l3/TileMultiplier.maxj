@@ -1,0 +1,87 @@
+package maxpower.blas.l3;
+
+import maxpower.fpmultiadder.FloatingPointMultiAdder;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class TileMultiplier extends KernelLib {
+	private DFEVar aInEnable;
+	private DFEVar bInEnable;
+
+	private final DFEVar outEnable;
+	private final DFEVar output;
+
+	/*
+	 * A tile: M rows by N cols
+	 * B tile: N rows by M cols
+	 *
+	 * where M >= N
+	 *
+	 * Output: M by M
+	 */
+	public TileMultiplier(int M, int N, DFEVar numTiles, DFEVar aIn, DFEVar bIn) {
+		super(aIn.getKernel());
+
+		if (M < N)
+			throw new RuntimeException("M must be greater than, or equal to, N");
+
+		CounterChain cc = control.count.makeCounterChain();
+		DFEVar tile = cc.addCounter(numTiles+1, 1);
+		DFEVar i = cc.addCounter(M, 1);
+		DFEVar j = cc.addCounter(M, 1);
+
+		DFEVar oddTile = tile[0].cast(dfeBool());
+
+		aInEnable = (tile > 0);
+		bInEnable = (tile < numTiles);
+		outEnable = (tile > 0);
+
+		if (M != N) {
+			aInEnable &= (j < N);
+			bInEnable &= (i < N);
+		}
+
+		DFEVar[] summands = new DFEVar[N];
+
+		for (int n = 0; n < N; ++n) {
+			DFEVar a = Reductions.streamHold(stream.offset(aIn, +n), (tile > 0) & (j === 0));
+
+			DFEType addrType = dfeUInt(MathUtils.bitsToAddress(2*M));
+			DFEVar  wrAddr   = j.cast(addrType) + (oddTile ? constant.var(addrType, M) : 0);
+			DFEVar  rdAddr   = j.cast(addrType) + (oddTile ? constant.var(addrType, 0) : M);
+
+			// double buffer within a single memory
+			Memory<DFEVar> bBuf = mem.alloc(bIn.getType(), 2*M);
+			// write vertically; read horizontally
+			bBuf.write(wrAddr, bIn, (i === n));
+
+			DFEVar b = bBuf.read(rdAddr);
+			summands[n] = a * b;
+		}
+
+		FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
+		output = adder.compute(summands);
+	}
+
+	public DFEVar getInputEnableA() {
+		return aInEnable;
+	}
+
+	public DFEVar getInputEnableB() {
+		return bInEnable;
+	}
+
+	public DFEVar getOutputEnable() {
+		return outEnable;
+	}
+
+	public DFEVar getOutput() {
+		return output;
+	}
+}
