@@ -14,6 +14,7 @@ public class FMemTileAccumulator extends TileAccumulator {
 
 	public FMemTileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, List<DFEVar> inputs) {
 		super(tileSize2D, sumTiles, inputValid, inputs);
+		init();
 	}
 
 	private static int i = 0;

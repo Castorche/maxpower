@@ -1,0 +1,101 @@
+package maxpower.blas.l3;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.LMemCommandStream;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class LMemTileAccumulator extends TileAccumulator {
+	public static final String LMEM_CMD_NAME  = "lmemCmds";
+	public static final String FROM_LMEM_NAME = "fromLmem";
+	public static final String TO_LMEM_NAME   = "toLMem";
+
+	private static final int MAX_BURSTS_PER_COMMAND = 64;
+
+	public LMemTileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, DFEVar... inputs) {
+		this(tileSize2D, sumTiles, inputValid, Arrays.asList(inputs));
+	}
+
+	public LMemTileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, List<DFEVar> inputs) {
+		super(tileSize2D, sumTiles, inputValid, inputs);
+		init();
+
+		getKernel().getManager().getManagerConfiguration().dram.setEnableFlagCommands(true);
+		sendLMemCommands(pos);
+		io.output(TO_LMEM_NAME, sum.getType(), tile !== (sumTiles-1)) <== sum;
+	}
+
+	@Override
+	protected DFEVar getSumCarry() {
+		return io.input(FROM_LMEM_NAME, sum.getType(), tile !== 0);
+	}
+
+	private void sendLMemCommands(DFEVar pos) {
+		final int burstSize    = 8 * getManager().getManagerConfiguration().dram.getAdjustedBurstSizeInBytes();
+		final int ptsPerBurst  = MathUtils.exactDivide(burstSize, sum.getType().getTotalBits());
+
+		if (tileSize2D % ptsPerBurst != 0)
+			throw new MaxCompilerAPIError("Tile size 2D must be a multiple of burst size");
+
+		final int numBursts    = tileSize2D / ptsPerBurst;
+		final int burstsPerCmd = Math.min(MAX_BURSTS_PER_COMMAND, numBursts / 2);
+
+		if (numBursts % burstsPerCmd != 0)
+			throw new MaxCompilerAPIError("Number bursts must be a multiple of bursts per command");
+
+		final int numIters     = numBursts / burstsPerCmd;
+
+		/*
+		 * Commands:
+		 * 0 -> block write until flag not set
+		 * 1 -> do write
+		 * 2 -> set flag
+		 * 3 -> block read until flag set
+		 * 4 -> do read
+		 * 5 -> unset flag
+		 *
+		 * Two flags are used, to lock the first and second halves of the tile.
+		 */
+		final int numCmds  = 6;
+		final int cmdBits  = MathUtils.bitsToAddress(numCmds);
+		final int iterBits = pos.getType().getTotalBits() - cmdBits;
+
+		DFEVar iter     = pos.slice(cmdBits, iterBits).cast(dfeUInt(iterBits));
+		DFEVar cmd      = pos.slice(0, cmdBits).cast(dfeUInt(cmdBits));
+		DFEVar flag     = constant.var(dfeUInt(32), 1) << (iter >= (numIters / 2));
+		DFEVar addr     = iter * MAX_BURSTS_PER_COMMAND;
+		DFEVar size     = constant.var(dfeUInt(8), burstsPerCmd);
+		DFEVar inc      = constant.var(dfeUInt(8), 1);
+		DFEVar rdStream = constant.var(dfeUInt(4), 0);
+		DFEVar wrStream = constant.var(dfeUInt(4), 1);
+		DFEVar tag      = constant.var(false);
+
+		List<DFEStruct> cmds = new ArrayList<DFEStruct>();
+		cmds.add(LMemCommandStream.cmdBlockUntilFlagsCleared(flag, wrStream, tag));
+		cmds.add(LMemCommandStream.cmdReadOrWrite(addr, size, inc, wrStream, tag));
+		cmds.add(LMemCommandStream.cmdSetFlags(flag, wrStream, tag));
+		cmds.add(LMemCommandStream.cmdBlockUntilFlagsSet(flag, rdStream, tag));
+		cmds.add(LMemCommandStream.cmdReadOrWrite(addr, size, inc, rdStream, tag));
+		cmds.add(LMemCommandStream.cmdClearFlags(flag, rdStream, tag));
+
+		DFEVar flipFlag = ((iter === (numIters / 2) - 1) | (iter === (numIters - 1)));
+		DFEVar dontSendFlipCmd = ((cmd === 2) | (cmd === 5)) & ~flipFlag;
+
+		DFEVar cmdEnable = (cmd < numCmds) & (iter < numIters) & ~dontSendFlipCmd & ~getOutputEnable();
+		io.output(LMEM_CMD_NAME, LMemCommandStream.getLMemCommandDFEStructType(), cmdEnable) <== control.mux(cmd, cmds);
+	}
+
+	public static void connectLMemStreams(CustomManager manager, String name, KernelBlock ta) {
+		MemoryControlGroup memCtrl = manager.addMemoryControlGroup(name+"_MemCtrl", ta.getOutput(LMemTileAccumulator.LMEM_CMD_NAME));
+		ta.getInput(FROM_LMEM_NAME) <== manager.addStreamFromOnCardMemory(name+"_FromLMem", memCtrl);
+		manager.addStreamToOnCardMemory(name+"_ToLMem", memCtrl) <== ta.getOutput(TO_LMEM_NAME);
+	}
+}

@@ -11,19 +11,26 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 
 public abstract class TileAccumulator extends KernelLib {
 	protected final int tileSize2D;
+	protected final DFEVar sumTiles;
 	protected final DFEVar inputValid;
+	protected final List<DFEVar> inputs;
 
-	protected final DFEVar tile;
-	protected final DFEVar pos;
-	protected final DFEVar sum;
-	protected final DFEVar sumValid;
+	protected DFEVar tile;
+	protected DFEVar pos;
+	protected DFEVar sum;
+	protected DFEVar sumValid;
 
 	protected TileAccumulator(int tileSize2D, DFEVar sumTiles, DFEVar inputValid, List<DFEVar> inputs) {
 		super(inputs[0].getKernel());
 
 		this.tileSize2D = tileSize2D;
+		this.sumTiles   = sumTiles;
 		this.inputValid = inputValid;
+		this.inputs     = inputs;
+	}
 
+	// this is split out of constructor as calling overridden methods in the constructor is a Bad Idea (TM)
+	protected void init() {
 		CounterChain cc = control.count.makeCounterChain(inputValid);
 		tile = cc.addCounter(sumTiles, 1);
 		pos  = cc.addCounter(tileSize2D, 1);
