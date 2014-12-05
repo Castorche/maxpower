@@ -1,0 +1,47 @@
+package maxpower.fanoutlimiter;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.SimulationParams;
+import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
+
+/**
+ * Minimalist test: does it compile and run something? Anything? Don't even check the answer.
+ */
+public class FanoutLimiterTest extends Kernel {
+
+	private final FanoutLimiter fl;
+
+	protected FanoutLimiterTest(KernelParameters parameters) {
+		super(parameters);
+
+		DFEVar in =io.input("input", dfeUInt(32));
+		fl = new FanoutLimiter(this, in, 3);
+
+		DFEVar sum = fl.get();
+		int nb = 10;
+		for(int i = 1; i < nb; ++i) {
+			sum = sum + stream.offset(fl.get(), i);
+		}
+
+		io.output("output", dfeUInt(32)) <== sum;
+	}
+
+	public static void main(String[] args) {
+		SimulationManager mgr = new SimulationManager("FanoutLimiterTest", SimulationParams.HDLSIM);
+		FanoutLimiterTest ker = new FanoutLimiterTest(mgr.makeKernelParameters());
+		mgr.setKernel(ker);
+
+		int size = 20;
+		double input[] = new double[size];
+		for(int i = 0; i < size; ++i) {
+			input[i] = i;
+		}
+		mgr.setInputData("input", input);
+		mgr.setKernelCycles(size);
+		mgr.runTest();
+
+		mgr.dumpOutput();
+	}
+}

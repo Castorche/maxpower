@@ -1,0 +1,205 @@
+package maxpower.fpmultiadder;
+
+import java.util.ArrayList;
+
+import com.maxeler.maxcompiler.v2.errors.SimulationOutputCheckException;
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.FloatingPoint;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager;
+import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager.DualSimMode;
+import com.maxeler.maxcompiler.v2.utils.Bits;
+
+public class FloatingPointMultiAdderTest {
+
+	private static final int N = 100; // length of test input data
+	private static final DFEFloat type = DFETypeFactory.dfeFloat(7, 7);
+	private static final double errorThreshold = 2.0 / (1 << type.getMantissaBits());
+
+	public static String toString(double v, DFEType type) {
+		if(type instanceof DFEFloat) {
+			DFEFloat ftype = (DFEFloat)type;
+			String str = type.encodeConstant(v).toString();
+			return str.charAt(0) + " " + str.substring(1, ftype.getExponentBits()+1) + " "
+			+ str.substring(1 + ftype.getExponentBits());
+		} else {
+			return type.encodeConstant(v).toString();
+		}
+	}
+
+	static class FPMATestKernel extends Kernel {
+
+		public void printBinary(DFEVar v) {
+			debug.simPrintf("%o ", FloatingPoint.getSignBit(v));
+			debug.simPrintf("%o ", FloatingPoint.getExponentBits(v));
+			debug.simPrintf("%o\n", FloatingPoint.getMantissaBits(v));
+		}
+
+		protected FPMATestKernel(KernelParameters parameters, int num_operands, FloatingPointMultiAdder.Optimization[] preferences) {
+			super(parameters);
+
+			DFEVectorType<DFEVar> arrayType = new DFEVectorType<DFEVar>(type, num_operands);
+			DFEVector<DFEVar> input = io.input("input", arrayType);
+
+			FloatingPointMultiAdder fpma = new FloatingPointMultiAdder(this, 13, true, preferences);
+			DFEVar fpma_out = fpma.compute(input.getElementsAsList().toArray(new DFEVar[]{}));
+
+			DFEVar std_out = input[0];
+			for(int i=1; i<input.getSize(); i++)
+				std_out += input[i];
+
+			io.output("std_out", std_out, type);
+			io.output("fpma_out", fpma_out, type);
+		}
+	}
+
+	public static void main(String[] args) {
+		// First arg is mode, which can be "short" or "long". Short test uses less test cases and runs on both simulators
+		// Long test uses more test cases and just runs on the bitaccurate simulator.
+
+		if(args.length < 3)
+			throw new RuntimeException("First argument must be either \"long\" or \"short\". "+
+					"Second argument must be a positive integer. "+
+					"Third argument must be one of {triadd,condaddsub,sequential,none}");
+
+		// Second argument is an integer that sets the number of operands to use.
+
+		int mode = 0;
+		if(args[0].equals("short")) {
+			mode = 0;
+		}
+		else if(args[0].equals("long")) {
+			mode = 1;
+		}
+
+		int num_operands = Integer.parseInt(args[1]);
+
+		FloatingPointMultiAdder.Optimization[] preferences = new FloatingPointMultiAdder.Optimization[1];
+		if(args[2].equals("triadd"))
+			preferences[0] = FloatingPointMultiAdder.Optimization.TRI_ADDER;
+		else if(args[2].equals("condaddsub"))
+			preferences[0] = FloatingPointMultiAdder.Optimization.COND_ADD_SUB;
+		else if(args[2].equals("sequential"))
+			preferences[0] = FloatingPointMultiAdder.Optimization.SEQUENTIAL;
+		else if(args[2].equals("none"))
+			preferences[0] = FloatingPointMultiAdder.Optimization.NONE;
+
+		System.out.printf("Preferences: %s\n", preferences[0].toString());
+
+		_DualSimulationManager m = new _DualSimulationManager("FPMATest", mode==0 ? DualSimMode.PARALLEL : DualSimMode.A_ONLY);
+
+		m.setKernels(new FPMATestKernel(m.makeKernelParameters_A(), num_operands, preferences),
+					 new FPMATestKernel(m.makeKernelParameters_B(), num_operands, preferences));
+
+		ArrayList<Double> elements = new ArrayList<Double>();
+
+		for(int i=0; i<N; i++) {
+			elements.add((double)i);
+			elements.add((double)-i);
+			if(i != 0)
+				elements.add(1.0/i);
+		}
+
+
+
+		DFEVectorType<DFEVar> array_type = new DFEVectorType<DFEVar>(type, num_operands);
+
+		for(int i=0; i<type.getTotalBits(); i++) {
+			Bits bits = new Bits(type.getTotalBits());
+			bits.setBits(0, type.getTotalBits(), 0);
+			bits.setBit(i, 1);
+
+			elements.add(type.decodeConstant(bits));
+		}
+
+		if(mode==1) {
+			for(int i=0; i<type.getTotalBits(); i++) {
+				for(int j=0; j<type.getTotalBits(); j++) {
+					Bits bits = new Bits(type.getTotalBits());
+					bits.setBits(0, type.getTotalBits(), 0);
+					bits.setBit(i, 1);
+					bits.setBit(j, 1);
+
+					elements.add(type.decodeConstant(bits));
+				}
+			}
+		}
+
+		int num_elements = elements.size();
+		int index = 0;
+		int num_cycles = num_elements*num_elements;
+
+		ArrayList<Bits> list = new ArrayList<Bits>(num_cycles);
+
+		System.out.printf("Number of elements: %d\n", num_elements);
+		System.out.printf("Number of cycles: %d\n", num_cycles);
+
+		double[][] input = new double[num_cycles][num_operands];
+
+		for(int i=0; i<num_elements; i++) {
+			for(int j=0; j<num_elements; j++) {
+				input[index][0] = elements[i];
+				input[index][1] = elements[j];
+
+				for(int k=2; k<num_operands; k++)
+					input[index][k] = elements[(i+k-1)%num_elements];
+
+				list.add(array_type.encodeConstant(input[index]));
+				index++;
+			}
+		}
+
+		m.setInputDataRaw("input", list);
+
+		m.setKernelCycles(num_cycles);
+
+		m.runTest();
+
+		double[] std_out = m.getOutputDataArray("std_out");
+		double[] fpma_out = m.getOutputDataArray("fpma_out");
+
+		for(int i=0; i<num_cycles; i++) {
+			double max = Math.abs(input[i][0]);
+			for(int j=1; j<num_operands; j++) {
+				max = Math.max(max, Math.abs(input[i][j]));
+			}
+			double expected = std_out[i];
+			double result = fpma_out[i];
+
+			double expected_cpu = 0;
+			for(int j=0; j<num_operands; j++) {
+				expected_cpu += input[i][j];
+			}
+			try {
+				double d = type.decodeConstant(type.encodeConstant(expected_cpu));
+				if(d == 0) {
+					expected_cpu = 0;
+				}
+			} catch(Throwable t) {}
+
+			double absolute_difference = Math.abs(expected - result);
+			double relative_difference = absolute_difference / Math.max(max, expected);
+
+			double absolute_difference_cpu = Math.abs(expected_cpu - result);
+			double relative_difference_cpu = absolute_difference_cpu / Math.max(max, expected_cpu);
+
+			relative_difference = Math.min(relative_difference, relative_difference_cpu);
+
+			if(expected != result && relative_difference > errorThreshold) {
+				System.out.printf("Error on element %d %.20f\n", i, relative_difference);
+				for(int j=0; j<num_operands; j++) {
+					System.out.printf("%.20f\n", input[i][j]);
+				}
+
+				throw new SimulationOutputCheckException(m.getManager_A(), "different: " + expected + ", " + result );
+			}
+		}
+		m.logMsg("Test PASSED");
+	}
+}
