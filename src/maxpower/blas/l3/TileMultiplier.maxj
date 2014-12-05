@@ -1,11 +1,14 @@
 package maxpower.blas.l3;
 
 import maxpower.fpmultiadder.FloatingPointMultiAdder;
+import maxpower.ops.KernelBinaryOp.Add;
+import maxpower.treereduce.TreeReduce;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
@@ -65,8 +68,12 @@ public class TileMultiplier extends KernelLib {
 			summands[n] = a * b;
 		}
 
-		FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
-		output = adder.compute(summands);
+		if (aIn.getType() instanceof DFEFloat) {
+			FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
+			output = adder.compute(summands);
+		} else {
+			output = TreeReduce.reduce(new Add<DFEVar>(), summands);
+		}
 	}
 
 	public DFEVar getInputEnableA() {

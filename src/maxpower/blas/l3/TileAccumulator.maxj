@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import maxpower.fpmultiadder.FloatingPointMultiAdder;
+import maxpower.ops.KernelBinaryOp.Add;
+import maxpower.treereduce.TreeReduce;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 
 public abstract class TileAccumulator extends KernelLib {
@@ -41,8 +44,12 @@ public abstract class TileAccumulator extends KernelLib {
 		summands.add((tile === 0) ? 0 : getSumCarry());
 		summands.addAll(inputs);
 
-		FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
-		sum <== adder.compute(summands.toArray(new DFEVar[0]));
+		if (sum.getType() instanceof DFEFloat) {
+			FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
+			sum <== adder.compute(summands);
+		} else {
+			sum <== TreeReduce.reduce(new Add<DFEVar>(), summands);
+		}
 
 		sumValid = (tile === (sumTiles-1));
 	}
