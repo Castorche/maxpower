@@ -9,20 +9,22 @@ import maxpower.ops.AssociativeOp;
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;
 
-// TODO add overloads which accept List<T> rather than T...
 public class TreeReduce {
-	public static <T extends KernelObjectVectorizable<T, T>> T reduce(AssociativeOp<T> func, T... inputs) {
-		if (inputs.length < 1)
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(AssociativeOp<T> op, T... inputs) {
+		return reduce(op, Arrays.asList(inputs));
+	}
+
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(AssociativeOp<T> op, List<T> inputs) {
+		if (inputs.isEmpty())
 			throw new RuntimeException("Input length for reduction needs to be >= 1.");
 
-		List<T> current = Arrays.asList(inputs);
-
-		while(current.size() > 1) {
+		List<T> current = inputs;
+		while (current.size() > 1) {
 			List<T> next = new ArrayList<T>(current.size()/2 + 1);
 
-			for(int i=0; i<current.size(); i+=2) {
-				if(i + 1 < current.size())
-					next.add(func.op(current[i], current[i+1]));
+			for (int i = 0; i < current.size(); i += 2) {
+				if (i + 1 < current.size())
+					next.add(op.op(current[i], current[i+1]));
 				else
 					next.add(current[i]);
 			}
@@ -33,34 +35,43 @@ public class TreeReduce {
 		return current[0];
 	}
 
-	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, AssociativeOp<T> func, T... inputs) {
-		return reduce(pipeEvery, false, func, inputs);
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, AssociativeOp<T> op, T... inputs) {
+		return reduce(pipeEvery, op, Arrays.asList(inputs));
 	}
 
-	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, boolean pipeLast, AssociativeOp<T> func, T... inputs) {
-		if (inputs.length < 1)
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, AssociativeOp<T> op, List<T> inputs) {
+		return reduce(pipeEvery, false, op, inputs);
+	}
+
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, boolean pipeLast, AssociativeOp<T> op, T... inputs) {
+		return reduce(pipeEvery, pipeLast, op, Arrays.asList(inputs));
+	}
+
+	public static <T extends KernelObjectVectorizable<T, T>> T reduce(int pipeEvery, boolean pipeLast, AssociativeOp<T> op, List<T> inputs) {
+		if (inputs.isEmpty())
 			throw new RuntimeException("Input length for reduction needs to be >= 1.");
 
-		List<T> current = Arrays.asList(inputs);
+		List<T> current = inputs;
 		final Kernel kernel = current.get(0).getKernel();
 
 		boolean lastPipe = false;
 		int level = 0;
 
-		while(current.size() > 1) {
+		while (current.size() > 1) {
 			List<T> next = new ArrayList<T>(current.size()/2 + 1);
 
-			for(int i=0; i<current.size(); i+=2) {
-				if(i + 1 < current.size()) {
+			for (int i = 0; i < current.size(); i += 2) {
+				if (i + 1 < current.size()) {
 					lastPipe = false;
-					T now = func.op(current[i], current[i+1]);
+					T now = op.op(current[i], current[i+1]);
 					if (level % pipeEvery == pipeEvery-1) {
 						lastPipe = true;
 						now = kernel.optimization.pipeline(now);
 					}
 					next.add(now);
-				} else
+				} else {
 					next.add(current[i]);
+				}
 			}
 
 			level++;

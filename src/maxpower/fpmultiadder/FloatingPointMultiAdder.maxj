@@ -106,6 +106,10 @@ public class FloatingPointMultiAdder extends KernelLib{
 			return computeSimultaneous(elements);
 	}
 
+	public DFEVar compute(List<DFEVar> elements) {
+		return compute(elements.toArray(new DFEVar[0]));
+	}
+
 	public DFEVector<DFEVar> compute(DFEVector<DFEVar>... elements) {
 		if(elements.length == 0)
 			throw new RuntimeException("There should be at least 1 elements to add");
