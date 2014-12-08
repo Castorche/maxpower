@@ -86,10 +86,13 @@ public class LMemTileAccumulator extends TileAccumulator {
 		cmds.add(LMemCommandStream.cmdReadOrWrite(addr, size, inc, rdStream, tag));
 		cmds.add(LMemCommandStream.cmdClearFlags(flag, rdStream, tag));
 
-		DFEVar flipFlag = ((iter === (numIters / 2) - 1) | (iter === (numIters - 1)));
-		DFEVar dontSendFlipCmd = ((cmd === 2) | (cmd === 5)) & ~flipFlag;
+		DFEVar isFlipIter = ((iter === (numIters / 2) - 1) | (iter === (numIters - 1)));
 
-		DFEVar cmdEnable = (cmd < numCmds) & (iter < numIters) & ~dontSendFlipCmd & ~getOutputEnable();
+		optimization.pushPipeliningFactor(0);
+		DFEVar sendCmd = (cmd === 0) | (cmd === 1) | ((cmd === 2) & isFlipIter) | (cmd === 3) | (cmd === 4) | ((cmd === 5) & isFlipIter);
+		optimization.popPipeliningFactor();
+
+		DFEVar cmdEnable = optimization.pipeline(sendCmd) & (iter < numIters) & ~getOutputEnable();
 		io.output(LMEM_CMD_NAME, LMemCommandStream.getLMemCommandDFEStructType(), cmdEnable) <== control.mux(cmd, cmds);
 	}
 
