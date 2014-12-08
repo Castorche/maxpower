@@ -15,7 +15,7 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
  * that these not be combined with add / remove.
  *
  * It is the responsibility of the user to ensure that only one method affecting
- * state (push, pop, clean) is called on any given cycle. Otherwise, the resulting
+ * state (push, pop, clear) is called on any given cycle. Otherwise, the resulting
  * state will be inconsistent.
  *
  * @author Chris Jones

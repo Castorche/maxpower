@@ -14,7 +14,7 @@ import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
  * that these not be combined with add / remove.
  *
  * It is the responsibility of the user to ensure that only one method affecting
- * state (push, pop, clean) is called on any given cycle. Otherwise, the resulting
+ * state (push, pop, clear) is called on any given cycle. Otherwise, the resulting
  * state will be inconsistent. The pushPop method provided may assist in such instances.
  * These methods will only affect state for the next cycle.
  *
