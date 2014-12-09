@@ -5,6 +5,8 @@
  *      Author: tperry
  */
 
+#define _BSD_SOURCE
+
 #include "maxhash.h"
 #include "maxhash_internal.h"
 
@@ -315,8 +317,6 @@ maxhash_err_t maxhash_internal_table_init(
 maxhash_err_t maxhash_internal_sw_init(maxhash_table_t **table,
 		const maxhash_table_params_t *tparams)
 {
-	printf("MaxHash software version: %s\n", SVN_REVISION);
-
 	maxhash_err_t err = MAXHASH_ERR_OK;
 
 	*table = calloc(1, sizeof(maxhash_table_t));
@@ -446,26 +446,18 @@ maxhash_err_t maxhash_check_version(maxhash_engine_state_t *es)
 {
 	bool has_version = has_constant_string(es, "", "MaxHash_Version");
 	if (!has_version)
-		fprintf(stderr, "*** Warning: MaxHash version is not defined in "
-				"the MaxFile. ***\n");
+		fprintf(stderr, "*** Warning: MaxHash version is not defined in the MaxFile. ***\n");
 
-	const char *maxhash_version_maxfile = get_maxfile_string_constant(es, "",
-			"MaxHash_Version");
-	if (strncmp(maxhash_version_maxfile, SVN_REVISION, strlen(SVN_REVISION)))
+	const char *maxhash_version_maxfile = get_maxfile_string_constant(es, "", "MaxHash_Version");
+
+	if (!strncmp(maxhash_version_maxfile, UNRELEASED_VERSION_STRING,
+				strlen(UNRELEASED_VERSION_STRING)))
 	{
-		if (!strncmp(maxhash_version_maxfile, UNRELEASED_VERSION_STRING,
-					strlen(UNRELEASED_VERSION_STRING)))
-		{
-			fprintf(stderr, "\n*** Warning: MaxFile uses an unreleased version "
-					"of MaxHash. ***\n\n");
-		}
-		else
-		{
-			fprintf(stderr, "\n*** Warning: MaxHash version in MaxFile (%s) "
-					"does not match the version in software (%s). ***\n\n",
-					maxhash_version_maxfile, SVN_REVISION);
-		}
+		fprintf(stderr, "\n*** Warning: MaxFile uses an unreleased version "
+				"of MaxHash. ***\n\n");
 	}
+
+	// TODO put version checking back in
 
 	return MAXHASH_ERR_OK;
 }

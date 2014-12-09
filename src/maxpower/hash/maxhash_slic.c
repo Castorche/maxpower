@@ -5,6 +5,8 @@
  *      Author: tperry
  */
 
+#define _BSD_SOURCE
+
 #include "maxhash_internal.h"
 
 #include <string.h>
