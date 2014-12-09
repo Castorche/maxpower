@@ -1,0 +1,81 @@
+package com.maxeler.blas.l3.gemm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import maxpower.blas.l3.LMemTileAccumulatorKernel;
+import maxpower.blas.l3.TileMultiplierKernel;
+import maxpower.roundrobin.RoundRobin;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.managers.BuildConfig;
+import com.maxeler.maxcompiler.v2.managers.BuildConfig.OptimizationTechnique;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.DebugLevel;
+
+public class GemmManager extends CustomManager {
+	public GemmManager(GemmEngineParameters params) {
+		super(params);
+		configBuild(params);
+
+		DFEType type = params.getFloatingPointType();
+
+		int tileSize = params.getTileSize();
+		int numTMs   = params.getNumTileMultipliers();
+
+		addMaxFileConstant("tileSize", tileSize);
+		addMaxFileConstant("numTileMultipliers", numTMs);
+
+		DFELink a = addStreamFromCPU("A");
+		DFELink b = addStreamFromCPU("B");
+
+		DFELink[] rrA = null;
+		DFELink[] rrB = null;
+		if (numTMs > 1) {
+			/*
+			 * Distribute work between tile multipliers in stripes, eg. tileSize = 6, numTMs = 3
+			 *
+			 * A: 1 2 3 1 2 3   B: 1 1 1 1 1 1
+			 *    1 2 3 1 2 3      2 2 2 2 2 2
+			 *    1 2 3 1 2 3      3 3 3 3 3 3
+			 *    1 2 3 1 2 3      1 1 1 1 1 1
+			 *    1 2 3 1 2 3      2 2 2 2 2 2
+			 *    1 2 3 1 2 3      3 3 3 3 3 3
+			 */
+			rrA = RoundRobin.roundRobin(this, "RoundRobinA", type, numTMs, 1, a);
+			rrB = RoundRobin.roundRobin(this, "RoundRobinB", type, numTMs, tileSize, b);
+		} else {
+			rrA = new DFELink[] { a };
+			rrB = new DFELink[] { b };
+		}
+
+		List<DFELink> tm = new ArrayList<DFELink>();
+		for (int i = 0; i < numTMs; ++i) {
+			tm.add(TileMultiplierKernel.multiplyTiles(this, "TileMultiplier"+i, type, tileSize, tileSize / numTMs, rrA[i], rrB[i]));
+		}
+
+		getManagerConfiguration().dram.setBurstSize(4); // minimise DRAM FIFO size
+		addStreamToCPU("C") <== LMemTileAccumulatorKernel.accumulateTiles(this, "TileAccumulator", type, tileSize*tileSize, tm);
+	}
+
+	private void configBuild(GemmEngineParameters params) {
+		BuildConfig buildConfig = getBuildConfig();
+		buildConfig.setMPPRCostTableSearchRange(params.getMPPRStartCT(), params.getMPPREndCT());
+		buildConfig.setMPPRParallelism(params.getMPPRThreads());
+		buildConfig.setMPPRRetryNearMissesThreshold(params.getMPPRRetryThreshold());
+		buildConfig.setOptimizationGoal(OptimizationTechnique.AREA);
+
+		config.setDefaultStreamClockFrequency(params.getFrequency());
+
+		setParameter("quartus_cdb.ram_usage", "10000");
+
+		DebugLevel dbg = new DebugLevel();
+		dbg.setHasStreamStatus(params.hasStreamStatus());
+		debug.setDebugLevel(dbg);
+	}
+
+	public static void main(String[] args) {
+		new GemmManager(new GemmEngineParameters(args)).build();
+	}
+}
