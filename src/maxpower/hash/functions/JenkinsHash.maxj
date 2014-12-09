@@ -1,0 +1,86 @@
+package maxpower.hash.functions;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+
+/**
+ * Jenkins' 32-bit "one-at-a-time" hash function.
+ */
+public class JenkinsHash implements HashFunction {
+
+	private final KernelLib m_owner;
+	private final int m_chunkSize;
+
+	public JenkinsHash(KernelLib owner, String hashTableName) {
+		this(owner, hashTableName, OCTET_SIZE);
+	}
+
+	public JenkinsHash(KernelLib owner, String hashTableName, int chunkSizeBits) {
+		m_owner = owner;
+		m_chunkSize = chunkSizeBits;
+
+		owner.getKernel().getManager().addMaxFileConstant(hashTableName
+				+ "_JenkinsChunkWidth", chunkSizeBits);
+	}
+
+	@Override
+	public DFEVar hash(DFEVar key, DFEVar param) {
+		int keyBits = key.getType().getTotalBits();
+
+		if (keyBits % m_chunkSize != 0) {
+			int padBits = m_chunkSize - (keyBits % m_chunkSize);
+			key = m_owner.constant.var(DFETypeFactory.dfeRawBits(padBits), 0) # key;
+			keyBits += padBits;
+		}
+
+		boolean debug = false;
+
+		if (debug) m_owner.debug.simPrintf("key: %x\n", key);
+
+		int numChunks = keyBits / m_chunkSize;
+
+		DFEVectorType<DFEVar> chunksType = new DFEVectorType<DFEVar>(
+				DFETypeFactory.dfeUInt(m_chunkSize), numChunks);
+		DFEVector<DFEVar> chunks = chunksType.unpack(key);
+
+		DFEVar hash = param.cast(getType());
+
+		if (debug) m_owner.debug.simPrintf("param: %x\n", param);
+
+		for (int chunk = 0; chunk < numChunks; chunk++) {
+			if (debug) m_owner.debug.simPrintf("chunk: %x\n", chunks[chunk]);
+			m_owner.optimization.pushPipeliningFactor(0.0);
+			hash += chunks[chunk].cast(getType());
+			hash += hash << 10;
+			hash ^= hash >> 6;
+			hash = m_owner.optimization.pipeline(hash);
+			m_owner.optimization.popPipeliningFactor();
+			if (debug) m_owner.debug.simPrintf("hash: %x\n", hash);
+		}
+
+		m_owner.optimization.pushPipeliningFactor(0.0);
+		hash += hash << 3;
+		hash ^= hash >> 11;
+		hash += hash << 15;
+		hash = m_owner.optimization.pipeline(hash);
+		m_owner.optimization.popPipeliningFactor();
+
+		if (debug) m_owner.debug.simPrintf("final hash: %x\n", hash);
+
+		return hash.cast(getType());
+	}
+
+	@Override
+	public DFEVar hash(DFEVar key) {
+		return hash(key, m_owner.constant.var(getType(), 0));
+	}
+
+	@Override
+	public DFEType getType() {
+		return DFETypeFactory.dfeUInt(32);
+	}
+}

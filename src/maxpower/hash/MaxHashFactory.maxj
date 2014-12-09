@@ -1,0 +1,75 @@
+package maxpower.hash;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+
+/*
+ * Per-manager singleton factory and registry for MaxHash instances.
+ */
+public class MaxHashFactory {
+
+	private static final String UNRELEASED_VERSION_STRING = "0";
+
+	/* Each manager has a maximum of one MaxHashFactory. */
+	private static Map<String, MaxHashFactory> factories = new HashMap<String, MaxHashFactory>();
+
+	private final Map<String, List<MaxHash<?>>> hashes = new HashMap<String, List<MaxHash<?>>>();
+
+	private MaxHashFactory(DFEManager manager) {
+		String version = getClass().getPackage().getImplementationVersion();
+		if (version == null)
+			version = UNRELEASED_VERSION_STRING;
+		manager.addMaxFileStringConstant("MaxHash_Version", version);
+		manager.logMsg("MaxHash hardware version: %s\n", version);
+	}
+
+	private static MaxHashFactory getInstance(DFEManager manager) {
+		if (!factories.containsKey(manager.getName()))
+			factories.put(manager.getName(), new MaxHashFactory(manager));
+		return factories.get(manager.getName());
+	}
+
+	public static <T extends KernelObject<T>> MaxHash<T> create(
+			Kernel k,
+			MaxHashParameters<T> params,
+			DFEVar key,
+			DFEVar keyValid) {
+
+		MaxHashFactory mhf = MaxHashFactory.getInstance(params.getManager());
+
+		MaxHash<T> hash;
+
+		if (params.isPerfect() && params.getMaxBucketEntries() == 1)
+			hash = new MinimalPerfectHashMap<T>(params, k, key, keyValid);
+		else if (!params.isPerfect() && params.getMaxBucketEntries() > 1)
+			hash = new CollisionHandlingHashMap<T>(params, k, key, keyValid);
+		else
+			throw new MaxHashException(
+					"This parameter combination is not yet supported.");
+
+		if (!mhf.hashes.containsKey(k.getName()))
+			mhf.hashes.put(k.getName(), new ArrayList<MaxHash<?>>());
+
+		mhf.hashes.get(k.getName()).add(hash);
+		return hash;
+	}
+
+	public static Collection<MaxHash<?>> getHashTables(DFEManager m) {
+		Collection<MaxHash<?>> all = new ArrayList<MaxHash<?>>();
+		for (Collection<MaxHash<?>> some : getInstance(m).hashes.values())
+			all.addAll(some);
+		return all;
+	}
+
+	public static Collection<MaxHash<?>> getHashTables(Kernel k) {
+		return getInstance(k.getManager()).hashes.get(k.getName());
+	}
+}

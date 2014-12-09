@@ -1,0 +1,97 @@
+package maxpower.hash;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import maxpower.hash.functions.HashFunction;
+import maxpower.hash.functions.JenkinsHash;
+import maxpower.hash.mem.MemInterface;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+/**
+ * Collision-handling hash map with configurable hash function.
+ *
+ * Based on com.maxeler.mpt.core.utils.LowLatencyHashMap.
+ */
+class CollisionHandlingHashMap<T extends KernelObject<T>>
+		extends MaxHash<T> {
+
+	private final DFEVar m_match;
+	private final DFEVar m_index;
+	private final T m_value;
+	private final int m_maxBucketEntries;
+
+	CollisionHandlingHashMap(MaxHashParameters<T> params, KernelLib owner,
+			DFEVar key, DFEVar keyValid) {
+		super(params, owner, key, keyValid);
+
+		m_maxBucketEntries = params.getMaxBucketEntries();
+
+		DFEStructType romType = new DFEStructType(DFEStructType.sft("valid", dfeBool()),
+				DFEStructType.sft("key",   params.getKeyType()),
+				DFEStructType.sft("value", params.getValueType()));
+
+		HashFunction hash = new JenkinsHash(this, params.getName());
+		m_index = hash.hash(key).cast(dfeUInt(MathUtils.bitsToAddress(params.getNumValuesBuckets())));
+
+		DFEVar  matchOneHot = null;
+		List<T> values      = new ArrayList<T>();
+
+		for (int n = 0; n < params.getMaxBucketEntries(); ++n) {
+			DFEStruct bucket = mem.romMapped(params.getName() + "_Buckets" + n, getIndex(), romType, params.getNumValuesBuckets());
+
+			values.add(getBucketValue(bucket));
+
+			DFEVar keyMatch = (key === (DFEVar) bucket["key"]);
+
+			optimization.pushPipeliningFactor(0);
+			DFEVar match = ((DFEVar) bucket["valid"]) & keyMatch;
+			optimization.popPipeliningFactor();
+
+			matchOneHot = (matchOneHot == null) ? match : match # matchOneHot;
+		}
+
+		m_match = matchOneHot !== 0;
+		m_value = control.oneHotMux(matchOneHot, values);
+
+		addMaxFileConstant("MaxBucketEntries", getMaxBucketEntries());
+		addMaxFileConstant("Perfect", 0);
+		addMaxFileConstant("IndexWidth", m_index.getType().getTotalBits());
+	}
+
+	@Override
+	public T get() {
+		return m_value;
+	}
+
+	@Override
+	public DFEVar getIndex() {
+		return m_index;
+	}
+
+	@Override
+	public DFEVar containsKey() {
+		return m_match;
+	}
+
+	@SuppressWarnings("unchecked")
+	private T getBucketValue(DFEStruct bucket) {
+		return (T) bucket["value"];
+	}
+
+	@Override
+	protected int getMaxBucketEntries() {
+		return m_maxBucketEntries;
+	}
+
+	@Override
+	public List<MemInterface> getMemInterfaces() {
+		return new ArrayList<MemInterface>();
+	}
+}

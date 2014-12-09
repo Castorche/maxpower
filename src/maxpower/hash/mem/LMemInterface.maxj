@@ -1,0 +1,85 @@
+package maxpower.hash.mem;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import maxpower.hash.MaxHash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.LMemCommandStream;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+
+public class LMemInterface extends BurstMemInterface {
+
+	/* One set of streams per manager. */
+	private static Map<String, Boolean> hasHostMemoryStreams = new HashMap<String, Boolean>();
+
+	public LMemInterface(MaxHash<?> owner, String name, DFEStructType structType,
+			int numEntries, boolean isDoubleBuffered, int baseAddressBursts) {
+		super(owner, name, structType, numEntries, isDoubleBuffered, getLMemBurstSizeBytes(owner) * 8, baseAddressBursts);
+
+		addMaxFileConstant("BaseAddressBursts", getBaseAddressBursts());
+	}
+
+	private static int getLMemBurstSizeBytes(MaxHash<?> owner) {
+		return owner.getManager().getManagerConfiguration().dram.getAdjustedBurstSizeInBytes();
+	}
+
+	@Override
+	public boolean hasLMemStream() { return true; }
+
+	@Override
+	protected String getType() { return "LMem"; }
+
+	@Override
+	protected void doRead(DFEVar ctrl, DFEVar burstAddress, Buffer buffer) {
+		KernelLib owner = getOwner();
+
+		DFEVar realBurstAddress = getBaseAddressBursts(buffer) + burstAddress.cast(DFETypeFactory.dfeUInt(28));
+		getOwner().simPrintf(ctrl, "  realBurstAddress: %d\n", realBurstAddress);
+
+		LMemCommandStream.makeKernelOutput(getCmdStreamName(buffer),
+				ctrl,
+				realBurstAddress, // address
+				owner.constant.var(DFETypeFactory.dfeUInt(8), 1),      // size
+				owner.constant.var(DFETypeFactory.dfeUInt(1), 0),      // inc
+				owner.constant.var(DFETypeFactory.dfeUInt(1), 0),      // stream
+				owner.constant.var(false));
+	}
+
+	@Override
+	protected DFEVar getBurstData(DFEVar ctrl, Buffer buffer) {
+		return getOwner().io.input(getDataStreamName(buffer), DFETypeFactory.dfeUInt(getBurstSizeBits()), ctrl);
+	}
+
+	@Override
+	protected int getIOSeparation() {
+		return -20;
+	}
+
+	@Override
+	public void connectKernelMemoryStreams(CustomManager m, KernelBlock hashBlock) {
+		for (Buffer buffer : getBuffers()) {
+			DFELink memReadCmdStream = hashBlock.getOutput(getCmdStreamName(buffer));
+			DFELink memReadDataStream = m.addStreamFromOnCardMemory(getDataStreamName(buffer), memReadCmdStream);
+			hashBlock.getInput(getDataStreamName(buffer)) <== memReadDataStream;
+		}
+	}
+
+	@Override
+	public void setupHostMemoryStreams(CustomManager m) {
+		Boolean alreadySetup = hasHostMemoryStreams.get(m.getName());
+		if (alreadySetup == null || alreadySetup.booleanValue() == false) {
+			DFELink writeCPUCtrl = m.addStreamFromCPU("LMemWriteCPUCtrl");
+			DFELink writeCPUData = m.addStreamFromCPU("LMemWriteCPUData");
+			DFELink writeCard = m.addStreamToOnCardMemory("LMemWriteCard", writeCPUCtrl);
+			writeCard <== writeCPUData;
+			hasHostMemoryStreams.put(m.getName(), new Boolean(true));
+		}
+	}
+}

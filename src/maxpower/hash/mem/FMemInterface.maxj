@@ -1,0 +1,53 @@
+package maxpower.hash.mem;
+
+import maxpower.hash.MaxHash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+
+public class FMemInterface extends BurstMemInterface {
+
+	private final Memory<DFEVar> m_mem;
+
+	private final static int BURST_SIZE_BITS = 64;
+
+	public FMemInterface(MaxHash<?> owner, String name, DFEStructType structType,
+			int numEntries, boolean isDoubleBuffered) {
+		super(owner, name, structType, numEntries, isDoubleBuffered, BURST_SIZE_BITS, 0);
+		m_mem = owner.mem.alloc(DFETypeFactory.dfeUInt(64), getNumOccupiedBursts());
+		m_mem.mapToCPU(getTableMemName());
+	}
+
+	@Override
+	protected String getType() { return "FMem"; }
+
+	DFEVar word;
+
+	@Override
+	protected void doRead(DFEVar ctrl, DFEVar burstAddress, Buffer buffer) {
+		DFEVar index = burstAddress.cast(DFETypeFactory.dfeUInt(MathUtils.bitsToAddress(getNumOccupiedBurstsPerTable())));
+		if (isDoubleBuffered())
+			index = getReadBufferIndex(buffer) # index;
+		word = m_mem.read(index);
+	}
+
+	@Override
+	protected DFEVar getBurstData(DFEVar ctrl, Buffer buffer) {
+		return word;
+	}
+
+	@Override
+	protected int getIOSeparation() { return 0; }
+
+	@Override
+	public void connectKernelMemoryStreams(CustomManager m, KernelBlock hashBlock) {}
+
+	@Override
+	public void setupHostMemoryStreams(CustomManager m) {}
+}

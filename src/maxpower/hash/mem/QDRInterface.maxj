@@ -1,0 +1,75 @@
+package maxpower.hash.mem;
+
+import maxpower.hash.MaxHash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+
+public class QDRInterface extends BurstMemInterface {
+
+	private final static int ADDR_SIZE_BITS = 21;
+	private final static int BURST_SIZE_BITS = 144;
+
+	public QDRInterface(MaxHash<?> owner, String name, DFEStructType structType,
+			int numEntries, boolean isDoubleBuffered, int baseAddressBursts) {
+		super(owner, name, structType, numEntries, isDoubleBuffered, BURST_SIZE_BITS, baseAddressBursts);
+
+		addMaxFileConstant("BaseAddressBursts", getBaseAddressBursts());
+	}
+
+	@Override
+	public boolean hasQDRStream() { return true; }
+
+	@Override
+	protected String getType() { return "QDR"; }
+
+	public static int getQDR(Buffer buffer) {
+		switch (buffer) {
+			case A:  return 1;
+			case B:  return 2;
+			default: return 0;
+		}
+	}
+
+	@Override
+	protected void doRead(DFEVar ctrl, DFEVar burstAddress, Buffer buffer) {
+		getOwner().io.output(getCmdStreamName(buffer), DFETypeFactory.dfeUInt(ADDR_SIZE_BITS))
+			<== getBaseAddressBursts(buffer) + burstAddress.cast(DFETypeFactory.dfeUInt(ADDR_SIZE_BITS));
+	}
+
+	@Override
+	protected int getIOSeparation() {
+		return -40;
+	}
+
+	@Override
+	protected DFEVar getBurstData(DFEVar ctrl, Buffer buffer) {
+		return getOwner().io.input(getDataStreamName(buffer), DFETypeFactory.dfeUInt(getBurstSizeBits()), ctrl);
+	}
+
+	@Override
+	public void connectKernelMemoryStreams(CustomManager m, KernelBlock hashBlock) {
+		//for (Buffer buffer : getBuffers()) {
+		//	int qdr = getQDR(buffer);
+		//	DFELink memReadCmdStream = hashBlock.getOutput(getCmdStreamName(buffer));
+		//	m.addReadAddressStreamToQDR(qdr) <== memReadCmdStream;
+		//	DFELink memReadDataStream = m.addReadDataStreamFromQDR(qdr);
+		//	hashBlock.getInput(getDataStreamName(buffer)) <== memReadDataStream;
+		//}
+	}
+
+	@Override
+	public void setupHostMemoryStreams(CustomManager m) {}
+
+//	public DFEStruct getRaw(DFEVar ctrl, DFEVar index, Buffer buffer) {
+//		KernelLib owner = getOwner();
+//		owner.io.output("readAddrToQDR" + getQDR(buffer), m_addrType) <== index;
+//		DFEVar dataFromQDR = owner.io.input("readDataFromQDR" + getQDR(buffer), m_dataType);
+////		m_manager.addReadAddressStreamToQDR(QDR);
+//
+//		return dataFromQDR;
+//	}
+}

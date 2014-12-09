@@ -1,0 +1,110 @@
+package maxpower.hash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.DelimiterMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.NonBlockingInput;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.NonBlockingMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.networking.statemachines.Flushing;
+
+public class DeepMappedMemoryKernel extends Kernel {
+	private final int tableDepth = 32*1024;
+	private final int pcieWidth = 128;
+
+	public DeepMappedMemoryKernel(KernelParameters parameters) {
+		super(parameters);
+
+		flush.disabled();
+
+
+
+		/*
+		 * Data types
+		 */
+		DFEType tableEntryType = dfeUInt(166);
+		DFEType keyType = dfeUInt(128);
+
+		/*
+		 * Input handling
+		 */
+
+		// Round up to PCIe boundary
+		DFEType loadType = dfeUInt(MathUtils.nextMultiple(tableEntryType.getTotalBits(), pcieWidth));
+		int delimiterLength = 1; // The length in cycles of each data item
+
+		NonBlockingInput<DFEVar> load = io.nonBlockingInput("load", loadType,
+				constant.var(true), delimiterLength, DelimiterMode.FRAME_LENGTH, Flushing.interFrameGapNone, NonBlockingMode.NO_TRICKLING);
+
+		DFEVar loadData = load.data.slice(0, tableEntryType.getTotalBits()).cast(tableEntryType);
+		DFEVar loadValid = load.valid;
+
+		/*
+		 * Address maintenance
+		 */
+		Counter addressCounter = control.count.makeCounter(
+				control.count.makeParams(MathUtils.bitsToAddress(tableDepth))
+					.withEnable(loadValid)
+					.withWrapMode(WrapMode.MODULO_MAX_OF_COUNT)
+					.withInitValue(0)
+					.withMax(tableDepth)
+				);
+		DFEVar address = addressCounter.getCount();
+		DFEVar tableLoaded = addressCounter.getWrap();
+
+
+		/*
+		 * Implement double buffering with automatic table flipping
+		 */
+
+
+		// Select which table is currently being written to
+
+		DFEVar stagingTableSelect = control.count.makeCounter(
+					control.count.makeParams(1)
+						.withEnable(stream.offset(tableLoaded, -1)) // Flip one cycle after address table wraps.
+						.withWrapMode(WrapMode.MODULO_MAX_OF_COUNT)
+						.withInitValue(0)
+						.withMax(2)
+				).getCount();
+
+		// Debug register
+		io.scalarOutput("stagingTableSelect", stagingTableSelect.getType()) <== stagingTableSelect;
+
+
+		/*
+		 * Tables
+		 */
+		Memory<DFEVar> tableA = mem.alloc(tableEntryType, tableDepth);
+		tableA.write(address, loadData, (stagingTableSelect === 0) & loadValid);
+
+		Memory<DFEVar> tableB = mem.alloc(tableEntryType, tableDepth);
+		tableB.write(address, loadData, (stagingTableSelect === 1) & loadValid);
+
+		NonBlockingInput<DFEVar> keyInput = io.nonBlockingInput("key",
+				keyType, constant.var(true), 1, DelimiterMode.FRAME_LENGTH, Flushing.interFrameGapNone, NonBlockingMode.NO_TRICKLING);
+
+		DFEVar key = keyInput.data;
+		DFEVar keyValid = keyInput.valid;
+
+
+		DFEVar intermediateAddress = myHash(key);
+
+		// When 1 is being staged use the output of A.
+		// When 0 is being staged use the output of B
+		DFEVar intermediateValue =
+			stagingTableSelect ? tableA.read(intermediateAddress) : tableB.read(intermediateAddress);
+
+
+		io.output("intermediate", tableEntryType, keyValid) <== intermediateValue;
+	}
+
+	private DFEVar myHash(DFEVar key) {
+		return key.slice(0, MathUtils.bitsToAddress(tableDepth));
+	}
+}

@@ -1,0 +1,159 @@
+package maxpower.hash.mem;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import maxpower.hash.MaxHash;
+import maxpower.hash.MaxHashException;
+import maxpower.hash.MaxHashUtils;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.DelimiterMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.NonBlockingInput;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO.NonBlockingMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType.StructFieldType;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.Fanout;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.networking.statemachines.Flushing;
+
+
+public class DeepFMemInterface extends MemInterface {
+
+	private final Memory<DFEStruct> m_mem;
+	private final int m_id;
+	private final Fanout m_loadFanout;
+
+	private DFEStructType getLoadType(DFEStructType entryType) {
+		int deepFMemIDBits = DeepFMemHostStream.MAX_INTERFACES_BITS;
+		int width = deepFMemIDBits + entryType.getTotalBits();
+		int paddedWidth = MaxHashUtils.padToPCIeWidth(width);
+		int padding = paddedWidth - width;
+
+		List<StructFieldType> fields = new ArrayList<StructFieldType>();
+		fields.add(DFEStructType.sft("deepFMemID", DFETypeFactory.dfeUInt(deepFMemIDBits)));
+		fields.add(DFEStructType.sft("entry", entryType));
+		fields.add(DFEStructType.sft("padding", DFETypeFactory.dfeRawBits(padding)));
+
+		return new DFEStructType(fields.toArray(new StructFieldType[0]));
+	}
+
+	public DeepFMemInterface(MaxHash<?> owner, String name, DFEStructType entryType,
+			int numEntries, boolean isDoubleBuffered, DFEVar readBufferIndex) {
+		super(owner, name, entryType, numEntries, isDoubleBuffered);
+
+		CustomManager manager = owner.getManager();
+
+		m_loadFanout = DeepFMemHostStream.getInstance(manager).getFanout();
+		m_id = DeepFMemHostStream.getInstance(manager).addInterface();
+		addMaxFileConstant("DeepFMemID", m_id);
+
+		int delimiterLength = 1; // The length in cycles of each data item
+
+		NonBlockingInput<DFEStruct> load = owner.io.nonBlockingInput(
+				getFullName() + "_Load",
+				getLoadType(entryType),
+				owner.constant.var(true),
+				delimiterLength,
+				DelimiterMode.FRAME_LENGTH,
+				Flushing.interFrameGapNone,
+				NonBlockingMode.NO_TRICKLING);
+
+		DFEStruct loadData = load.data;
+		DFEVar loadValid = load.valid & ((DFEVar)loadData["deepFMemID"] === m_id);
+
+		Counter loadAddressCounter = owner.control.count.makeCounter(
+				owner.control.count.makeParams(MathUtils.bitsToAddress(getNumEntries()))
+					.withEnable(loadValid)
+					.withWrapMode(WrapMode.MODULO_MAX_OF_COUNT)
+					.withInitValue(0)
+					.withMax(getNumEntries())
+				);
+		DFEVar loadAddress = loadAddressCounter.getCount();
+
+		Memory<DFEVar> loadComplete = owner.mem.alloc(DFETypeFactory.dfeUInt(64), 2);
+		loadComplete.mapToCPU(getTableMemName() + "_Complete");
+		loadComplete.port(owner.constant.var(DFETypeFactory.dfeUInt(1), 0),
+				owner.constant.var(DFETypeFactory.dfeUInt(64), 1),
+				loadAddressCounter.getWrap(), RamWriteMode.WRITE_FIRST);
+
+		int memSize = getNumEntries();
+		if (isDoubleBuffered())
+		{
+			memSize *= 2;
+			DFEVar loadBufferIndex = ~readBufferIndex;
+			loadAddress = loadBufferIndex # loadAddress;
+		}
+
+		m_mem = owner.mem.alloc(entryType, memSize);
+		m_mem.write(loadAddress, (DFEStruct)loadData["entry"], loadValid);
+	}
+
+	@Override
+	public DFEStruct get(DFEVar ctrl, DFEVar address, Buffer buffer) {
+		DFEVar index = address;
+		if (isDoubleBuffered())
+			index = getReadBufferIndex(buffer) # index;
+		DFEStruct ret = m_mem.read(index);
+		return ret;
+	}
+
+	@Override
+	protected String getType() { return "DeepFMem"; }
+
+	@Override
+	public void connectKernelMemoryStreams(CustomManager m, KernelBlock hashBlock) {
+		DFELink instanceLink = m_loadFanout.addOutput(new Integer(m_id).toString());
+		hashBlock.getInput(getFullName() + "_Load") <== instanceLink;
+	}
+
+	@Override
+	public void setupHostMemoryStreams(CustomManager m) {}
+
+	/* Per-manager singleton class for shared DeepFMem host stream. */
+	private static class DeepFMemHostStream {
+
+		private static final Map<String, DeepFMemHostStream> streams = new HashMap<String, DeepFMemHostStream>();
+		private final Fanout m_fanout;
+		private int m_interfaceCount;
+		private static final int MAX_INTERFACES = 16;
+		static final int MAX_INTERFACES_BITS = MathUtils.bitsToAddress(MAX_INTERFACES);
+
+		private DeepFMemHostStream(CustomManager m) {
+			DFELink cpuLink = m.addStreamFromCPU("DeepFMemWriteCPUData");
+			m_fanout = m.fanout("DeepFMemFanout");
+			m_fanout.getInput() <== cpuLink;
+		}
+
+		static DeepFMemHostStream getInstance(CustomManager m) {
+			if (!streams.containsKey(m.getName()))
+				streams.put(m.getName(), new DeepFMemHostStream(m));
+			return streams.get(m.getName());
+		}
+
+		Fanout getFanout() {
+			return m_fanout;
+		}
+
+		int addInterface() {
+			int id = m_interfaceCount++;
+			if (id >= MAX_INTERFACES) {
+				throw new MaxHashException("Cannot attach more than "
+						+ MAX_INTERFACES
+						+ " to each Deep FMem host stream.");
+			}
+			return id;
+		}
+	}
+}

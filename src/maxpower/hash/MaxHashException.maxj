@@ -1,0 +1,13 @@
+package maxpower.hash;
+
+import com.maxeler.utils.MaxelerException;
+
+public class MaxHashException extends MaxelerException {
+
+	private static final long serialVersionUID = 1L;
+
+	public MaxHashException(String message) {
+		super(null, message);
+	}
+
+}

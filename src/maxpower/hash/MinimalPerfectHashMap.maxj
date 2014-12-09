@@ -1,0 +1,210 @@
+package maxpower.hash;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import maxpower.hash.functions.HashFunction;
+import maxpower.hash.functions.JenkinsHash;
+import maxpower.hash.mem.MemInterface;
+import maxpower.hash.mem.MemInterface.Buffer;
+import maxpower.hash.mem.MemInterface.MemType;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType.StructFieldType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+class MinimalPerfectHashMap<T extends KernelObject<T>> extends
+		MaxHash<T> {
+
+	private final MaxHashParameters<T> m_params;
+	private final MemInterface m_hashParamMem;
+	private final MemInterface m_valueMem;
+	private final DFEVar m_key;
+	private final DFEVar m_keyValid;
+	private final DFEVar m_index;
+	private final DFEVar m_containsKey;
+	private final T m_value;
+	private final HashFunction m_hash;
+
+	public DFEStructType getIntermediateStructType() {
+		List<StructFieldType> fields = new ArrayList<StructFieldType>();
+		fields.add(DFEStructType.sft("valid", dfeBool()));
+		fields.add(DFEStructType.sft("direct", dfeBool()));
+		fields.add(DFEStructType.sft("hashParam", m_hash.getType()));
+
+		return new DFEStructType(fields.toArray(new StructFieldType[0]));
+	}
+
+	MinimalPerfectHashMap(MaxHashParameters<T> params, KernelLib owner,
+			DFEVar key, DFEVar keyValid) {
+		super(params, owner, key, keyValid);
+
+		m_key = key;
+		m_keyValid = keyValid;
+		m_params = params;
+		m_hash = new JenkinsHash(this, getFullName(), m_params.getJenkinsChunkWidth());
+
+		simPrintf(keyValid, "=======================================================\n");
+		simPrintf(keyValid, "key: 0x%x (", key);
+		simPrintString(keyValid, key);
+		simPrintf(keyValid, ")\n");
+
+		DFEVar firstHash = m_hash.hash(key).cast(dfeUInt(MathUtils.bitsToAddress(m_params.getNumIntermediateBuckets())));
+
+		DFEVar readBufferSelect;
+		boolean isDoubleBuffered = m_params.isDoubleBufferingEnabled();
+
+		if (isDoubleBuffered)
+			/* Set depth to 2 to avoid compile errors. */
+			readBufferSelect = mem.romMapped(getName() + "_BufferSelect",
+				constant.var(dfeUInt(1), 0), dfeUInt(1), 2);
+		else
+			readBufferSelect = constant.var(false);
+
+		simPrintf(keyValid, "MinimalPerfectHashMap:\n");
+		simPrintf(keyValid & isDoubleBuffered, "  bufferSelect: %d\n", readBufferSelect);
+
+		int baseAddressBursts = m_params.getBaseAddressBursts();
+
+		m_hashParamMem = MemInterface.create(
+				this,
+				m_params.getIntermediateMemType(),
+				"HashParams",
+				getIntermediateStructType(),
+				baseAddressBursts,
+				m_params.getNumIntermediateBuckets(),
+				isDoubleBuffered,
+				readBufferSelect);
+
+		if (m_params.getIntermediateMemType() == MemType.LMEM)
+			baseAddressBursts += m_hashParamMem.getNumOccupiedBursts();
+
+		m_valueMem = MemInterface.create(
+				this,
+				m_params.getValuesMemType(),
+				"Values",
+				getOutputStructType(),
+				baseAddressBursts,
+				m_params.getNumValuesBuckets(),
+				isDoubleBuffered,
+				readBufferSelect);
+
+		DFEStruct valueStruct;
+
+		if (isDoubleBuffered) {
+			DFEVar indexA = getIndex(firstHash, Buffer.A);
+			DFEVar indexB = getIndex(firstHash, Buffer.B);
+
+			m_index = readBufferSelect ? indexB : indexA;
+
+			DFEStruct valueStructA = getValueStruct(indexA, Buffer.A);
+			DFEStruct valueStructB = getValueStruct(indexB, Buffer.B);
+
+			valueStruct = readBufferSelect ? valueStructB : valueStructA;
+		} else {
+			m_index = getIndex(firstHash, Buffer.A);
+			valueStruct = getValueStruct(m_index, Buffer.A);
+		}
+
+		simPrintf(keyValid, "MinimalPerfectHashMap():\n");
+		simPrintf(keyValid, "  m_index: 0x%x\n", m_index);
+
+		m_value = getBucketValue(valueStruct);
+		DFEVar validBitSet = (DFEVar) valueStruct["valid"];
+
+		m_containsKey = m_params.isValidateResults() ?
+				validBitSet & (DFEVar) valueStruct["key"] === key:
+				validBitSet;
+
+		simPrintf(keyValid, "  validBitSet: %d\n", validBitSet);
+		simPrintf(keyValid, "  m_containsKey: %d\n", m_containsKey);
+		simPrintf(keyValid, "  m_value: %d\n", m_value);
+
+		if (params.isDebugMode()) {
+			debug.simPrintf(keyValid, "DFE: response from " + getFullName() + ": [key: ");
+			int i, mod;
+			for (i = 0; i < key.getType().getTotalBits() / 8; i++)
+				debug.simPrintf(keyValid, "%02x", key.slice(i * 8, 8));
+			mod = key.getType().getTotalBits() % 8;
+			if (mod != 0)
+				debug.simPrintf(keyValid, "%02x", key.slice(i * 8, mod));
+			if (m_params.isValidateResults())
+				debug.simPrintf(keyValid, ", containsKey: %x", m_containsKey);
+			DFEVar keyOK = m_containsKey | !m_params.isValidateResults();
+			debug.simPrintf(keyValid & keyOK, ", value: ");
+			for (i = 0; i < m_value.getType().getTotalBits() / 8; i++)
+				debug.simPrintf(keyValid & keyOK, "%02x", m_value.pack().slice(i * 8, 8));
+			mod = m_value.getType().getTotalBits() % 8;
+			if (mod != 0)
+				debug.simPrintf(keyValid & keyOK, "%02x", m_value.pack().slice(i * 8, mod));
+			debug.simPrintf(keyValid, "]\n");
+		}
+
+		addMaxFileConstant("IsDoubleBuffered", params.isDoubleBufferingEnabled() ? 1 : 0);
+		addMaxFileConstant("Values_NumBuckets", params.getNumValuesBuckets());
+		addMaxFileConstant("HashParams_NumBuckets", params.getNumIntermediateBuckets());
+		addMaxFileConstant("MaxBucketEntries", getMaxBucketEntries());
+		addMaxFileConstant("Values_Width", params.getValueType().getTotalBits());
+		addMaxFileConstant("HashParams_Width", m_hash.getType().getTotalBits());
+		addMaxFileConstant("Perfect",	1);
+		addMaxFileConstant("IndexWidth", m_index.getType().getTotalBits());
+	}
+
+	private DFEVar getIndex(DFEVar firstHash, Buffer buffer) {
+
+		DFEStruct hashParamStruct = m_hashParamMem.get(m_keyValid, firstHash, buffer);
+
+		DFEVar isDirect = (DFEVar) hashParamStruct["direct"];
+		DFEVar hashParam = (DFEVar) hashParamStruct["hashParam"];
+		DFEVar secondHash = m_hash.hash(m_key, hashParam);
+
+		simPrintf(m_keyValid, "MinimalPerfectHash.getIndex(" + buffer.toString() + "):\n");
+		simPrintf(m_keyValid, "  firstHash: 0x%x\n", firstHash);
+		simPrintf(m_keyValid, "  hashParam: 0x%x\n", hashParam);
+		simPrintf(m_keyValid, "  isDirect: %d\n", isDirect);
+		simPrintf(m_keyValid, "  secondHash: 0x%x\n", secondHash);
+
+		return (isDirect ? hashParam : secondHash).cast(dfeUInt(MathUtils.bitsToAddress(m_params.getNumValuesBuckets())));
+	}
+
+	private DFEStruct getValueStruct(DFEVar index, Buffer buffer) {
+		return m_valueMem.get(m_keyValid, index, buffer);
+	}
+
+	@Override
+	public T get() {
+		return m_value;
+	}
+
+	@Override
+	public DFEVar getIndex() {
+		return m_index;
+	}
+
+	@Override
+	public DFEVar containsKey() {
+		return m_containsKey;
+	}
+
+	@SuppressWarnings("unchecked")
+	private T getBucketValue(DFEStruct bucket) {
+		return (T) bucket["value"];
+	}
+
+	@Override
+	protected int getMaxBucketEntries() {
+		return 1;
+	}
+
+	@Override
+	public List<MemInterface> getMemInterfaces() {
+		List<MemInterface> ret = new ArrayList<MemInterface>();
+		ret.add(m_hashParamMem);
+		ret.add(m_valueMem);
+		return ret;
+	}
+}

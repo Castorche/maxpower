@@ -1,0 +1,133 @@
+package maxpower.hash.mem;
+
+import maxpower.hash.MaxHash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.RoundingMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath.DivModResult;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+abstract class BurstMemInterface extends MemInterface {
+
+	private final int m_burstSizeBits;
+	private final int m_baseAddressBursts;
+
+	public BurstMemInterface(MaxHash<?> owner, String name, DFEStructType structType,
+			int numEntries, boolean isDoubleBuffered, int burstSizeBits, int baseAddressBursts) {
+		super(owner, name, structType, numEntries, isDoubleBuffered);
+
+		m_burstSizeBits = burstSizeBits;
+		m_baseAddressBursts = baseAddressBursts;
+	}
+
+	protected int getNumEntriesPerBurst() {
+		int baseEntrySize = MathUtils.nextMultiple(getStructType().getTotalBits(), 8);
+
+		int entriesPerBurst = m_burstSizeBits / baseEntrySize;
+
+		/* Get next-lowest power of 2 to ensure that the address
+		 * of an entry in a burst can be calculated efficiently. */
+		if (!MathUtils.isPowerOf2(entriesPerBurst))
+			entriesPerBurst = MathUtils.nextPowerOfTwo(entriesPerBurst) / 2;
+
+		/* Ensure that entries will be at integer byte offsets. */
+		while (m_burstSizeBits % entriesPerBurst > 0)
+			entriesPerBurst /= 2;
+
+		return entriesPerBurst;
+	}
+
+	protected int getEntrySize() {
+		return m_burstSizeBits / getNumEntriesPerBurst();
+	}
+
+	protected int getNumOccupiedBurstsPerTable() {
+		int entriesPerBurst = getNumEntriesPerBurst();
+		int numBursts = (getNumEntries() + entriesPerBurst - 1) / entriesPerBurst;
+		return numBursts;
+	}
+
+	@Override
+	public int getNumOccupiedBursts() {
+		int numBursts = getNumOccupiedBurstsPerTable();
+		if (isDoubleBuffered())
+			numBursts *= 2;
+		return numBursts;
+	}
+
+	@Override
+	public DFEStruct get(DFEVar ctrl, DFEVar address, Buffer buffer) {
+		DFEVar addressInBurst = setupRead(ctrl, address, buffer);
+		return processResponse(ctrl, addressInBurst, buffer);
+	}
+
+	protected DFEVar setupRead(DFEVar ctrl, DFEVar address, Buffer buffer) {
+		MaxHash<?> owner = getOwner();
+
+		int entriesPerBurst = getNumEntriesPerBurst();
+		int entryBits = MathUtils.bitsToAddress(entriesPerBurst);
+
+		/* Need some extra space for calculations involving entriesPerBurst. */
+		DFEVar widerAddress = address.cast(DFETypeFactory.dfeUInt(address.getType().getTotalBits() + entryBits));
+
+		owner.optimization.pushRoundingMode(RoundingMode.TRUNCATE);
+		DivModResult dmr = KernelMath.divMod(widerAddress, owner.constant.var(entriesPerBurst));
+		owner.optimization.popRoundingMode();
+
+		DFEVar burstAddress = dmr.getQuotient();
+		DFEVar addressInBurst = entryBits == 0 ? owner.constant.var(0) : dmr.getRemainder().cast(DFETypeFactory.dfeUInt(entryBits));
+
+		int baseAddressBursts = m_baseAddressBursts;
+		if (isDoubleBuffered() && buffer == Buffer.B)
+			baseAddressBursts += getNumOccupiedBurstsPerTable();
+
+		owner.simPrintf(ctrl, "BurstMemInterface: Buffer: " + buffer.toString() + ":\n");
+		owner.simPrintf(ctrl, "  entriesPerBurst: %d\n", getNumEntriesPerBurst());
+		owner.simPrintf(ctrl, "  burstAddress: %d\n", burstAddress);
+		if (entryBits > 0)
+			owner.simPrintf(ctrl, "  addressInBurst: %d\n", addressInBurst);
+
+		doRead(ctrl, burstAddress, buffer);
+
+		return addressInBurst;
+	}
+
+	protected int getBurstSizeBits() { return m_burstSizeBits; }
+	protected int getBaseAddressBursts() { return m_baseAddressBursts; }
+
+	protected int getBaseAddressBursts(Buffer buffer) {
+		int baseAddressBursts = getBaseAddressBursts();
+		if (isDoubleBuffered() && buffer == Buffer.B)
+			baseAddressBursts += getNumOccupiedBurstsPerTable();
+		return baseAddressBursts;
+	}
+
+	protected DFEStruct processResponse(DFEVar ctrl, DFEVar addressInBurst, Buffer buffer) {
+		MaxHash<?> owner = getOwner();
+		DFEVectorType<DFEVar> burstType = new DFEVectorType<DFEVar>(DFETypeFactory.dfeUInt(getEntrySize()), getNumEntriesPerBurst());
+		DFEVector<DFEVar> memReadDataVector = burstType.unpack(getBurstData(ctrl, buffer).slice(0, burstType.getTotalBits()));
+		DFEVar memReadData = owner.control.mux(addressInBurst, memReadDataVector.getElementsAsList());
+		DFEVar memReadDataSliced = memReadData.slice(0, getStructType().getTotalBits());
+
+		owner.simPrintf(ctrl, "  memReadData: 0x%x\n", memReadData);
+		owner.simPrintf(ctrl, "  memReadDataSliced: 0x%x\n", memReadDataSliced);
+
+		/* Force delay between memory command write and corresponding data read. */
+		if (getIOSeparation() != 0)
+			owner.io.forceExactIOSeparation(getDataStreamName(buffer), getCmdStreamName(buffer), getIOSeparation());
+
+		return getStructType().unpack(memReadDataSliced);
+	}
+
+	protected abstract void doRead(DFEVar ctrl, DFEVar burstAddress, Buffer buffer);
+
+	protected abstract int getIOSeparation();
+
+	protected abstract DFEVar getBurstData(DFEVar ctrl, Buffer buffer);
+}

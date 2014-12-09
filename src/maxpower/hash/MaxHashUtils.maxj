@@ -1,0 +1,18 @@
+package maxpower.hash;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class MaxHashUtils {
+
+	public static int padToPCIeWidth(int width) {
+		return MathUtils.nextPowerOfTwo(MathUtils.nextMultiple(width, 64));
+	}
+
+	public static DFEVar pad8(DFEVar var) {
+		int bits = var.getType().getTotalBits();
+		int paddedBits = MathUtils.nextMultiple(bits, 8);
+		return var.cast(DFETypeFactory.dfeUInt(paddedBits));
+	}
+}
