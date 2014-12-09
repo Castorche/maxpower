@@ -61,7 +61,7 @@ void dgemm(
 
 	double* aIn  = malloc(mTiles * kTiles * tileSize2D * sizeof(double));
 	double* bIn  = malloc(kTiles * nTiles * tileSize2D * sizeof(double));
-//	double* cOut = malloc(mTiles * pTiles * tileSize2D * sizeof(double));
+	double* cOut = malloc(mTiles * nTiles * tileSize2D * sizeof(double));
 
 	// TODO OMP
 
@@ -116,16 +116,22 @@ void dgemm(
 		max_queue_input_handle(actions, bHandle, bIn, kTiles * nTiles * tileSize2D * sizeof(double));
 	}
 
-	for (size_t mm = 0; mm < mTiles; ++mm) {
-		for (size_t nn = 0; nn < nTiles; ++nn) {
-			for (size_t x = 0; x < TILE_SIZE; ++x) {
-				max_queue_output_handle(actions, cHandle, &C[(mm*TILE_SIZE+x)*ldc+nn*TILE_SIZE], TILE_SIZE * sizeof(double));
-			}
-		}
-	}
+	max_queue_output_handle(actions, cHandle, cOut, mTiles * nTiles * tileSize2D * sizeof(double));
 
 	printf("Running action...\n");
 	max_run(engine, actions);
+
+	pos = 0;
+	for (size_t mm = 0; mm < mTiles; ++mm) {
+		for (size_t nn = 0; nn < nTiles; ++nn) {
+			for (size_t x = 0; x < TILE_SIZE; ++x) {
+				for (size_t y = 0; y < TILE_SIZE; ++y) {
+					C[(mm*TILE_SIZE+x)*ldc+nn*TILE_SIZE+y] *= beta;
+					C[(mm*TILE_SIZE+x)*ldc+nn*TILE_SIZE+y] += alpha * cOut[pos++];
+				}
+			}
+		}
+	}
 }
 
 int main() {
@@ -140,11 +146,11 @@ int main() {
 	double* Chw = calloc(m * n, sizeof(double));
 
 	for (int i = 0; i < m*k; ++i) {
-		A[i] = i;//random() % 100;
+		A[i] = random() % 100;
 	}
 
 	for (int i = 0; i < k*n; ++i) {
-		B[i] = i;//random() % 100;
+		B[i] = random() % 100;
 	}
 
 	for (int i = 0; i < m*n; ++i) {
