@@ -65,13 +65,22 @@ void dgemm(
 
 	// TODO OMP
 
+	// re-order A and B matrices into tiles and pad them up to size
 	size_t pos = 0;
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		for (size_t kk = 0; kk < kTiles; ++kk) {
-			// TODO special case for m == mTiles-1 or n == nTiles-1 (add padding)
 			for (size_t x = 0; x < TILE_SIZE; ++x) {
-				for (size_t y = 0; y < TILE_SIZE; ++y) {
-					aIn[pos++] = A[(mm*TILE_SIZE+x)*lda+kk*TILE_SIZE+y];
+				size_t row = mm*TILE_SIZE + x;
+
+				if (row < m) {
+					for (size_t y = 0; y < TILE_SIZE; ++y) {
+						size_t col = kk*TILE_SIZE + y;
+						aIn[pos++] = (col < n) ? A[row*lda+col] : 0;
+					}
+				} else {
+					for (size_t y = 0; y < TILE_SIZE; ++y) {
+						aIn[pos++] = 0;
+					}
 				}
 			}
 		}
@@ -80,10 +89,18 @@ void dgemm(
 	pos = 0;
 	for (size_t nn = 0; nn < nTiles; ++nn) {
 		for (size_t kk = 0; kk < kTiles; ++kk) {
-			// TODO special case for m == mTiles-1 or n == nTiles-1 (add padding)
 			for (size_t x = 0; x < TILE_SIZE; ++x) {
-				for (size_t y = 0; y < TILE_SIZE; ++y) {
-					bIn[pos++] = B[(kk*TILE_SIZE+x)*ldb+nn*TILE_SIZE+y];
+				size_t row = kk*TILE_SIZE + x;
+
+				if (row < m) {
+					for (size_t y = 0; y < TILE_SIZE; ++y) {
+						size_t col = nn*TILE_SIZE + y;
+						bIn[pos++] = (col < n) ? B[row*ldb+col] : 0;
+					}
+				} else {
+					for (size_t y = 0; y < TILE_SIZE; ++y) {
+						bIn[pos++] = 0;
+					}
 				}
 			}
 		}
@@ -137,9 +154,9 @@ void dgemm(
 int main() {
 	dgemm_init();
 
-	const int m = 2 * TILE_SIZE;
-	const int n = 4 * TILE_SIZE;
-	const int k = 3 * TILE_SIZE;
+	const int m = 3 * TILE_SIZE;//random() % (5 * TILE_SIZE);
+	const int n = 4 * TILE_SIZE;//random() % (5 * TILE_SIZE);
+	const int k = 2 * TILE_SIZE;//random() % (5 * TILE_SIZE);
 	double* A   = calloc(m * k, sizeof(double));
 	double* B   = calloc(k * n, sizeof(double));
 	double* Csw = calloc(m * n, sizeof(double));
