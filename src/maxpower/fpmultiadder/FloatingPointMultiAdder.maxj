@@ -46,7 +46,7 @@ public class FloatingPointMultiAdder extends KernelLib{
 	private final boolean auto_increase_guards;
 	private Optimization optimization_mode;
 
-	public FloatingPointMultiAdder(KernelLib owner, int guard_bits, boolean auto_increase, Optimization[] preferences) {
+	public FloatingPointMultiAdder(KernelLib owner, int guard_bits, boolean auto_increase, Optimization... preferences) {
 		super(owner);
 		fix_num_guard_bits = guard_bits;
 		auto_increase_guards = auto_increase;
@@ -259,7 +259,9 @@ public class FloatingPointMultiAdder extends KernelLib{
 				tree_values[i].set("value", m_shifted_extended);
 			}
 			else {
-				mantissas_shifted_negated[i] = (signs[i] ? -m_shifted_extended : m_shifted_extended);
+				optimization.pushPipeliningFactor(0);
+				mantissas_shifted_negated[i] = optimization.pipeline(signs[i] ? -m_shifted_extended : m_shifted_extended);
+				optimization.popPipeliningFactor();
 			}
 		}
 
