@@ -1,6 +1,8 @@
-package maxpower.fpmultiadder;
+package maxpower.kernel.arithmetic;
 
 import java.util.ArrayList;
+
+import maxpower.kernel.arithmetic.FloatingPointMultiAdder;
 
 import com.maxeler.maxcompiler.v2.errors.SimulationOutputCheckException;
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;

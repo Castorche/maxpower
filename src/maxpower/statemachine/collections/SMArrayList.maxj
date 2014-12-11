@@ -1,4 +1,4 @@
-package maxpower.smcollections;
+package maxpower.statemachine.collections;
 
 import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
 import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;

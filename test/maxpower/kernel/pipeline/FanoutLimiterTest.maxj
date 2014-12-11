@@ -1,4 +1,6 @@
-package maxpower.fanoutlimiter;
+package maxpower.kernel.pipeline;
+
+import maxpower.kernel.pipeline.FanoutLimiter;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;

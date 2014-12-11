@@ -1,4 +1,4 @@
-package maxpower.treereduce;
+package maxpower.kernel;
 
 import java.util.ArrayList;
 import java.util.Arrays;

@@ -1,4 +1,4 @@
-package maxpower.fanoutlimiter;
+package maxpower.kernel.pipeline;
 
 import java.util.ArrayList;
 

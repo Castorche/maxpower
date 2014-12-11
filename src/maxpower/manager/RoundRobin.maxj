@@ -1,4 +1,4 @@
-package maxpower.roundrobin;
+package maxpower.manager;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;

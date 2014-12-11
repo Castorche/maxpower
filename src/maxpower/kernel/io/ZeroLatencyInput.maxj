@@ -1,6 +1,6 @@
-package maxpower.zerolatencyinput;
+package maxpower.kernel.io;
 
-import maxpower.smcollections.SMQueue;
+import maxpower.statemachine.collections.SMQueue;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.SMIO;

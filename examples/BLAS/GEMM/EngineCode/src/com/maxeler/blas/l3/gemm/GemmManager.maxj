@@ -5,7 +5,7 @@ import java.util.List;
 
 import maxpower.blas.l3.LMemTileAccumulatorKernel;
 import maxpower.blas.l3.TileMultiplierKernel;
-import maxpower.roundrobin.RoundRobin;
+import maxpower.manager.RoundRobin;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.managers.BuildConfig;

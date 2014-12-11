@@ -1,14 +1,14 @@
-package maxpower.fpmultiadder;
+package maxpower.kernel.arithmetic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import maxpower.fanoutlimiter.FanoutLimiter;
+import maxpower.kernel.TreeReduce;
+import maxpower.kernel.KernelBinaryOp.Add;
+import maxpower.kernel.KernelBinaryOp.Max;
+import maxpower.kernel.pipeline.FanoutLimiter;
 import maxpower.ops.AssociativeOp;
-import maxpower.ops.KernelBinaryOp.Add;
-import maxpower.ops.KernelBinaryOp.Max;
-import maxpower.treereduce.TreeReduce;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler._Kernel;

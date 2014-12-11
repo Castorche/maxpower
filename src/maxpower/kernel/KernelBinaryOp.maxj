@@ -1,4 +1,7 @@
-package maxpower.ops;
+package maxpower.kernel;
+
+import maxpower.ops.AssociativeOp;
+import maxpower.ops.BinaryOp;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;

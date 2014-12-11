@@ -1,4 +1,4 @@
-package maxpower.fanoutlimiter;
+package maxpower.kernel.pipeline;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
