@@ -46,12 +46,6 @@ void dgemm(
 {
 	// TODO support transform
 
-	// TODO add support for arbitrary tile size and add padding
-	if (((m % TILE_SIZE) != 0) || ((k % TILE_SIZE) != 0) || ((n % TILE_SIZE) != 0)) {
-		printf("Matrix dimensions must be an exact multiple of the tile size (%d)\n", TILE_SIZE);
-		exit(1);
-	}
-
 	size_t mTiles = (m + TILE_SIZE - 1) / TILE_SIZE;
 	size_t nTiles = (n + TILE_SIZE - 1) / TILE_SIZE;
 	size_t kTiles = (k + TILE_SIZE - 1) / TILE_SIZE;
@@ -75,7 +69,7 @@ void dgemm(
 				if (row < m) {
 					for (size_t y = 0; y < TILE_SIZE; ++y) {
 						size_t col = kk*TILE_SIZE + y;
-						aIn[pos++] = (col < n) ? A[row*lda+col] : 0;
+						aIn[pos++] = (col < k) ? A[row*lda+col] : 0;
 					}
 				} else {
 					for (size_t y = 0; y < TILE_SIZE; ++y) {
@@ -92,7 +86,7 @@ void dgemm(
 			for (size_t x = 0; x < TILE_SIZE; ++x) {
 				size_t row = kk*TILE_SIZE + x;
 
-				if (row < m) {
+				if (row < k) {
 					for (size_t y = 0; y < TILE_SIZE; ++y) {
 						size_t col = nn*TILE_SIZE + y;
 						bIn[pos++] = (col < n) ? B[row*ldb+col] : 0;
@@ -142,9 +136,21 @@ void dgemm(
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		for (size_t nn = 0; nn < nTiles; ++nn) {
 			for (size_t x = 0; x < TILE_SIZE; ++x) {
+				size_t row = mm*TILE_SIZE + x;
+				if (row >= m) {
+					pos += (TILE_SIZE - x) * TILE_SIZE;
+					break;
+				}
+
 				for (size_t y = 0; y < TILE_SIZE; ++y) {
-					C[(mm*TILE_SIZE+x)*ldc+nn*TILE_SIZE+y] *= beta;
-					C[(mm*TILE_SIZE+x)*ldc+nn*TILE_SIZE+y] += alpha * cOut[pos++];
+					size_t col = nn*TILE_SIZE + y;
+					if (col >= n) {
+						pos += TILE_SIZE - y;
+						break;
+					}
+
+					C[row*ldc+col] *= beta;
+					C[row*ldc+col] += alpha * cOut[pos++];
 				}
 			}
 		}
@@ -154,9 +160,9 @@ void dgemm(
 int main() {
 	dgemm_init();
 
-	const int m = 3 * TILE_SIZE;//random() % (5 * TILE_SIZE);
-	const int n = 4 * TILE_SIZE;//random() % (5 * TILE_SIZE);
-	const int k = 2 * TILE_SIZE;//random() % (5 * TILE_SIZE);
+	const int m = random() % (5 * TILE_SIZE);
+	const int n = random() % (5 * TILE_SIZE);
+	const int k = random() % (5 * TILE_SIZE);
 	double* A   = calloc(m * k, sizeof(double));
 	double* B   = calloc(k * n, sizeof(double));
 	double* Csw = calloc(m * n, sizeof(double));
