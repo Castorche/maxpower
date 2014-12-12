@@ -1,4 +1,4 @@
-package com.maxeler.blas.l3.gemm;
+package maxpower.blas.l3.gemm;
 
 import com.maxeler.maxcompiler.v2.build.EngineParameters;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;

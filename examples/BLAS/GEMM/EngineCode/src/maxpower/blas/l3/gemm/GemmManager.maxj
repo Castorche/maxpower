@@ -1,4 +1,4 @@
-package com.maxeler.blas.l3.gemm;
+package maxpower.blas.l3.gemm;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +13,7 @@ import com.maxeler.maxcompiler.v2.managers.BuildConfig.OptimizationTechnique;
 import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
 import com.maxeler.maxcompiler.v2.managers.custom.stdlib.DebugLevel;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControllerConfig;
 
 public class GemmManager extends CustomManager {
 	public GemmManager(GemmEngineParameters params) {
@@ -55,7 +56,13 @@ public class GemmManager extends CustomManager {
 			tm.add(TileMultiplierKernel.multiplyTiles(this, "TileMultiplier"+i, type, tileSize, tileSize / numTMs, rrA[i], rrB[i]));
 		}
 
-		getManagerConfiguration().dram.setBurstSize(4); // minimise DRAM FIFO size
+		// Please kill me!
+		MemoryControllerConfig memConfig = new MemoryControllerConfig();
+		memConfig.setEnableParityMode(true, true, 72, false);
+		memConfig.setMAX4qMode(true);
+		config.setMemoryControllerConfig(memConfig);
+		getManagerConfiguration().dram.setOnCardMemoryFrequency(666);
+
 		addStreamToCPU("C") <== LMemTileAccumulatorKernel.accumulateTiles(this, "TileAccumulator", type, tileSize*tileSize, tm);
 	}
 
@@ -69,10 +76,14 @@ public class GemmManager extends CustomManager {
 		config.setDefaultStreamClockFrequency(params.getFrequency());
 
 		setParameter("quartus_cdb.ram_usage", "10000");
+		setParameter("quartus_fit.ram_usage", "32000");
+		setParameter("quartus_sta.ram_usage", "24000");
 
 		DebugLevel dbg = new DebugLevel();
 		dbg.setHasStreamStatus(params.hasStreamStatus());
 		debug.setDebugLevel(dbg);
+
+		getCurrentKernelConfig().optimization.setConditionalArithmeticEnabled(true);
 	}
 
 	public static void main(String[] args) {
