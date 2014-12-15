@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "DGEMM.h"
 
@@ -29,6 +30,8 @@ max_engine_t* engine;
 const max_handle_t* aHandle;
 const max_handle_t* bHandle;
 const max_handle_t* cHandle;
+struct timespec run_start;
+struct timespec run_finish;
 
 void dgemm_init() {
 	printf("Initializing maxfile...\n");
@@ -129,8 +132,9 @@ void dgemm(
 
 	max_queue_output_handle(actions, cHandle, cOut, mTiles * nTiles * tileSize2D * sizeof(double));
 
-	printf("Running action...\n");
+	clock_gettime(CLOCK_REALTIME, &run_start);
 	max_run(engine, actions);
+	clock_gettime(CLOCK_REALTIME, &run_finish);
 
 	pos = 0;
 	for (size_t mm = 0; mm < mTiles; ++mm) {
@@ -185,10 +189,25 @@ int main() {
 	double alpha = 1;
 	double beta  = 0;
 
-	printf("Running SW...\n");
+	struct timespec start;
+	struct timespec finish;
+
+	printf("Running SW... ");
+	clock_gettime(CLOCK_REALTIME, &start);
 	dgemm_model("n", "n", m, n, k, alpha, A, k, B, n, beta, Csw, n);
-	printf("Running HW...\n");
+	clock_gettime(CLOCK_REALTIME, &finish);
+
+	printf("took: %d.%09d s\n", finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec);
+
+	printf("Running HW... ");
+	clock_gettime(CLOCK_REALTIME, &start);
 	dgemm("n", "n", m, n, k, alpha, A, k, B, n, beta, Chw, n);
+	clock_gettime(CLOCK_REALTIME, &finish);
+
+	printf("took: %d.%09d s (CPU time: %d.%09d s)\n",
+			finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec,
+			(finish.tv_sec - start.tv_sec) - (run_finish.tv_sec - run_start.tv_sec),
+			(finish.tv_nsec - start.tv_nsec) - (run_finish.tv_nsec - run_start.tv_nsec));
 
 	printf("Comparing results...\n");
 	for (int i = 0; i < m; ++i) {
