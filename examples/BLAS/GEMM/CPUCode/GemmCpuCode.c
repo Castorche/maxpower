@@ -197,14 +197,14 @@ int main() {
 	dgemm_model("n", "n", m, n, k, alpha, A, k, B, n, beta, Csw, n);
 	clock_gettime(CLOCK_REALTIME, &finish);
 
-	printf("took: %d.%09d s\n", finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec);
+	printf("took: %ld.%09ld s\n", finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec);
 
 	printf("Running HW... ");
 	clock_gettime(CLOCK_REALTIME, &start);
 	dgemm("n", "n", m, n, k, alpha, A, k, B, n, beta, Chw, n);
 	clock_gettime(CLOCK_REALTIME, &finish);
 
-	printf("took: %d.%09d s (CPU time: %d.%09d s)\n",
+	printf("took: %ld.%09ld s (CPU time: %ld.%09ld s)\n",
 			finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec,
 			(finish.tv_sec - start.tv_sec) - (run_finish.tv_sec - run_start.tv_sec),
 			(finish.tv_nsec - start.tv_nsec) - (run_finish.tv_nsec - run_start.tv_nsec));
