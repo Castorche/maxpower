@@ -8,6 +8,7 @@
 
 #define NUM_TMS   DGEMM_numTileMultipliers
 #define TILE_SIZE DGEMM_tileSize
+#define FREQUENCY DGEMM_frequency
 
 #define USE_BLAS
 
@@ -193,6 +194,22 @@ int main() {
 	double* B   = calloc(k * n, sizeof(double));
 	double* Csw = calloc(m * n, sizeof(double));
 	double* Chw = calloc(m * n, sizeof(double));
+
+	printf("Matrix dimensions: m = %d, n = %d, k = %d\n", m, n, k);
+
+	size_t mTiles = (m + TILE_SIZE - 1) / TILE_SIZE;
+	size_t nTiles = (n + TILE_SIZE - 1) / TILE_SIZE;
+	size_t kTiles = (k + TILE_SIZE - 1) / TILE_SIZE;
+
+	printf("DFE tile size: %d\n", TILE_SIZE);
+	printf("DFE compute dimensions: m = %zu, n = %zu, k = %zu\n",
+			mTiles * TILE_SIZE, nTiles * TILE_SIZE, kTiles * TILE_SIZE);
+
+	size_t cpuPoints = m * n * k;
+	size_t dfePoints = mTiles * nTiles * kTiles * TILE_SIZE * TILE_SIZE * TILE_SIZE;
+	printf("DFE compute efficiency: %f\n", ((double) cpuPoints) / dfePoints);
+	printf("DFE frequency: %d MHz\n", FREQUENCY);
+	printf("DFE predicted compute time: %f s\n", ((double) dfePoints) / (((double) TILE_SIZE) * FREQUENCY * 1000000));
 
 	for (int i = 0; i < m*k; ++i) {
 		A[i] = random() % 100;
