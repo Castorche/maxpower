@@ -9,12 +9,21 @@
 #define NUM_TMS   DGEMM_numTileMultipliers
 #define TILE_SIZE DGEMM_tileSize
 
+#define USE_BLAS
+
+#ifdef USE_BLAS
+#include <cblas.h>
+#endif
+
 void dgemm_model(
 		const char* trans_a, const char* trans_b, size_t m, size_t n, size_t k, double alpha,
 		const double* A, size_t lda, const double* B, size_t ldb, double beta, double* C, size_t ldc)
 {
 	// TODO support transform
 
+#ifdef USE_BLAS
+	cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+#else
 	for (size_t mm = 0; mm < m; ++mm) {
 		for (size_t nn = 0; nn < n; ++nn) {
 			C[mm*ldc+nn] *= beta;
@@ -23,6 +32,7 @@ void dgemm_model(
 			}
 		}
 	}
+#endif
 }
 
 max_file_t* maxfile;
@@ -59,8 +69,6 @@ void dgemm(
 	double* aIn  = malloc(mTiles * kTiles * tileSize2D * sizeof(double));
 	double* bIn  = malloc(kTiles * nTiles * tileSize2D * sizeof(double));
 	double* cOut = malloc(mTiles * nTiles * kTiles * tileSize2D * sizeof(double));
-
-	// TODO OMP
 
 	// re-order A and B matrices into tiles and pad them up to size
 	size_t pos = 0;

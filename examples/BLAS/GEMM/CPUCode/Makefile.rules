@@ -43,11 +43,7 @@ CXXFLAGS  = -Wall -Wextra $(O_FLAGS) -I$(RUNRULE_DIR)/include $(shell slic-confi
 LDFLAGS   = $(O_FLAGS) $(shell slic-config --libs) $(RUNRULE_LDFLAGS)
 
 #   Add other user-defined extensions here, e.g. --
-#CFLAGS    += -I/my/header/files
-
-#MKLROOT := /network-raid/opt/intel/composer_xe_2013_sp1.2.144/mkl/
-#CFLAGS  += -I$(MKLROOT)/include
-#LDFLAGS += -Wl,--no-as-needed -L$(MKLROOT)/lib/intel64 -lmkl_intel_ilp64 -lmkl_core -lmkl_gnu_thread -ldl
+LDFLAGS  += -L/usr/lib64/atlas-sse3 -lcblas
 
 MAXFILES      = $(patsubst %.max,$(RUNRULE_DIR)/maxfiles/%.max, $(RUNRULE_MAXFILES))
 MAXFILES_OBJ  = $(patsubst %.max,$(RUNRULE_DIR)/objects/maxfiles/slic_%.o, $(RUNRULE_MAXFILES))
