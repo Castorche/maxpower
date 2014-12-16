@@ -58,7 +58,7 @@ void dgemm(
 
 	double* aIn  = malloc(mTiles * kTiles * tileSize2D * sizeof(double));
 	double* bIn  = malloc(kTiles * nTiles * tileSize2D * sizeof(double));
-	double* cOut = malloc(mTiles * nTiles * tileSize2D * sizeof(double));
+	double* cOut = malloc(mTiles * nTiles * kTiles * tileSize2D * sizeof(double));
 
 	// TODO OMP
 
@@ -117,8 +117,7 @@ void dgemm(
 		max_set_ticks(actions, "RoundRobinB", numTiles * tileSize2D);
 	}
 
-	max_set_ticks(actions, "TileAccumulator", numTiles * tileSize2D);
-	max_set_uint64t(actions, "TileAccumulator", "sumTiles", kTiles);
+	max_set_ticks(actions, "Adder", numTiles * tileSize2D);
 
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		for (size_t nn = 0; nn < nTiles; ++nn) {
@@ -130,7 +129,7 @@ void dgemm(
 		max_queue_input_handle(actions, bHandle, bIn, kTiles * nTiles * tileSize2D * sizeof(double));
 	}
 
-	max_queue_output_handle(actions, cHandle, cOut, mTiles * nTiles * tileSize2D * sizeof(double));
+	max_queue_output_handle(actions, cHandle, cOut, numTiles * tileSize2D * sizeof(double));
 
 	clock_gettime(CLOCK_REALTIME, &run_start);
 	max_run(engine, actions);
@@ -139,26 +138,41 @@ void dgemm(
 	pos = 0;
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		for (size_t nn = 0; nn < nTiles; ++nn) {
-			for (size_t x = 0; x < TILE_SIZE; ++x) {
-				size_t row = mm*TILE_SIZE + x;
-				if (row >= m) {
-					pos += (TILE_SIZE - x) * TILE_SIZE;
-					break;
-				}
-
-				for (size_t y = 0; y < TILE_SIZE; ++y) {
-					size_t col = nn*TILE_SIZE + y;
-					if (col >= n) {
-						pos += TILE_SIZE - y;
+			for (size_t kk = 0; kk < kTiles; ++kk) {
+				for (size_t x = 0; x < TILE_SIZE; ++x) {
+					size_t row = mm*TILE_SIZE + x;
+					if (row >= m) {
+						pos += (TILE_SIZE - x) * TILE_SIZE;
 						break;
 					}
 
-					C[row*ldc+col] *= beta;
-					C[row*ldc+col] += alpha * cOut[pos++];
+					for (size_t y = 0; y < TILE_SIZE; ++y) {
+						size_t col = nn*TILE_SIZE + y;
+						if (col >= n) {
+							pos += TILE_SIZE - y;
+							break;
+						}
+
+						if (kk == 0) C[row*ldc+col] *= beta;
+						C[row*ldc+col] += alpha * cOut[pos++];
+					}
 				}
 			}
 		}
 	}
+}
+
+static struct timespec diff(struct timespec start, struct timespec finish) {
+	struct timespec diff;
+	if ((finish.tv_nsec < start.tv_nsec)) {
+		diff.tv_sec  = finish.tv_sec  - start.tv_sec  - 1;
+		diff.tv_nsec = finish.tv_nsec - start.tv_nsec + 1000000000;
+	} else {
+		diff.tv_sec  = finish.tv_sec  - start.tv_sec;
+		diff.tv_nsec = finish.tv_nsec - start.tv_nsec;
+	}
+
+	return diff;
 }
 
 int main() {
@@ -197,17 +211,20 @@ int main() {
 	dgemm_model("n", "n", m, n, k, alpha, A, k, B, n, beta, Csw, n);
 	clock_gettime(CLOCK_REALTIME, &finish);
 
-	printf("took: %ld.%09ld s\n", finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec);
+	struct timespec sw_time = diff(start, finish);
+
+	printf("took: %ld.%09ld s\n", sw_time.tv_sec, sw_time.tv_nsec);
 
 	printf("Running HW... ");
 	clock_gettime(CLOCK_REALTIME, &start);
 	dgemm("n", "n", m, n, k, alpha, A, k, B, n, beta, Chw, n);
 	clock_gettime(CLOCK_REALTIME, &finish);
 
+	struct timespec hw_time  = diff(start, finish);
+	struct timespec cpu_time = diff(diff(run_start, run_finish), hw_time);
+
 	printf("took: %ld.%09ld s (CPU time: %ld.%09ld s)\n",
-			finish.tv_sec - start.tv_sec, finish.tv_nsec - start.tv_nsec,
-			(finish.tv_sec - start.tv_sec) - (run_finish.tv_sec - run_start.tv_sec),
-			(finish.tv_nsec - start.tv_nsec) - (run_finish.tv_nsec - run_start.tv_nsec));
+			hw_time.tv_sec, hw_time.tv_nsec, cpu_time.tv_sec, cpu_time.tv_nsec);
 
 	printf("Comparing results...\n");
 	for (int i = 0; i < m; ++i) {
