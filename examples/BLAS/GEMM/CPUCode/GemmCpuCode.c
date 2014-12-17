@@ -37,6 +37,7 @@ void dgemm_model(
 
 max_file_t* maxfile;
 max_engine_t* engine;
+max_actions_t* actions;
 const max_handle_t* aHandle;
 const max_handle_t* bHandle;
 const max_handle_t* cHandle;
@@ -51,6 +52,7 @@ void dgemm_init() {
 	cHandle  = max_get_handle_stream(maxfile, "C");
 	printf("Loading engine...\n");
 	engine   = max_load(maxfile, "*");
+	actions  = max_actions_init(maxfile, NULL);
 }
 
 void dgemm(
@@ -111,7 +113,7 @@ void dgemm(
 		}
 	}
 
-	max_actions_t* actions = max_actions_init(maxfile, NULL);
+	max_clear_queues(actions);
 	max_set_ticks(actions, "TM", (numTiles+1) * tileSize2D);
 	max_set_uint64t(actions, "TM", "numTiles", numTiles);
 
