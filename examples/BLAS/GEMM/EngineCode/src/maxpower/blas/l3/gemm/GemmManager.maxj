@@ -1,26 +1,13 @@
 package maxpower.blas.l3.gemm;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import maxpower.blas.l3.TileMultiplierKernel;
-import maxpower.kernel.KernelBinaryOp.Add;
-import maxpower.kernel.TreeReduce;
-import maxpower.kernel.arithmetic.FloatingPointMultiAdder;
-import maxpower.kernel.arithmetic.FloatingPointMultiAdder.Optimization;
-import maxpower.manager.RoundRobin;
 
-import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
-import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
-import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
-import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.managers.BuildConfig;
 import com.maxeler.maxcompiler.v2.managers.BuildConfig.Effort;
 import com.maxeler.maxcompiler.v2.managers.BuildConfig.OptimizationTechnique;
 import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
-import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
 import com.maxeler.maxcompiler.v2.managers.custom.stdlib.DebugLevel;
 
 public class GemmManager extends CustomManager {
@@ -31,69 +18,14 @@ public class GemmManager extends CustomManager {
 		DFEType type = params.getFloatingPointType();
 
 		int tileSize = params.getTileSize();
-		int numTMs   = params.getNumTileMultipliers();
 
 		addMaxFileConstant("tileSize", tileSize);
-		addMaxFileConstant("numTileMultipliers", numTMs);
+		addMaxFileConstant("frequency", params.getFrequency());
 
 		DFELink a = addStreamFromCPU("A");
 		DFELink b = addStreamFromCPU("B");
 
-		DFELink[] rrA = null;
-		DFELink[] rrB = null;
-		if (numTMs > 1) {
-			/*
-			 * Distribute work between tile multipliers in stripes, eg. tileSize = 6, numTMs = 3
-			 *
-			 * A: 1 2 3 1 2 3   B: 1 1 1 1 1 1
-			 *    1 2 3 1 2 3      2 2 2 2 2 2
-			 *    1 2 3 1 2 3      3 3 3 3 3 3
-			 *    1 2 3 1 2 3      1 1 1 1 1 1
-			 *    1 2 3 1 2 3      2 2 2 2 2 2
-			 *    1 2 3 1 2 3      3 3 3 3 3 3
-			 */
-			rrA = RoundRobin.roundRobin(this, "RoundRobinA", type, numTMs, 1, a);
-			rrB = RoundRobin.roundRobin(this, "RoundRobinB", type, numTMs, tileSize, b);
-		} else {
-			rrA = new DFELink[] { a };
-			rrB = new DFELink[] { b };
-		}
-
-		List<DFELink> tm = new ArrayList<DFELink>();
-		for (int i = 0; i < numTMs; ++i) {
-			tm.add(TileMultiplierKernel.multiplyTiles(this, "TileMultiplier"+i, type, tileSize, tileSize / numTMs, rrA[i], rrB[i]));
-		}
-
-		addStreamToCPU("C") <== (numTMs > 1) ? AdderKernel.add(this, type, tm) : tm.get(0);
-	}
-
-	private static class AdderKernel extends Kernel {
-		public static final String INPUT_NAME_PREFIX = "din";
-		public static final String OUTPUT_NAME = "dout";
-
-		protected AdderKernel(KernelParameters params, DFEType type, int nInputs) {
-			super(params);
-
-			List<DFEVar> summands = new ArrayList<DFEVar>();
-			for (int i = 0; i < nInputs; ++i)
-				summands.add(io.input(INPUT_NAME_PREFIX+i, type));
-
-			if (type instanceof DFEFloat) {
-				FloatingPointMultiAdder adder =
-					new FloatingPointMultiAdder(this, 1, false, Optimization.COND_ADD_SUB, Optimization.TRI_ADDER);
-				io.output(OUTPUT_NAME, type) <== adder.compute(summands);
-			} else {
-				io.output(OUTPUT_NAME, type) <== TreeReduce.reduce(new Add<DFEVar>(), summands);
-			}
-		}
-
-		public static DFELink add(CustomManager manager, DFEType type, List<DFELink> summands) {
-			KernelBlock block = manager.addKernel(new AdderKernel(manager.makeKernelParameters("Adder"), type, summands.size()));
-			for (int i = 0; i < summands.size(); ++i) {
-				block.getInput(INPUT_NAME_PREFIX+i) <== summands[i];
-			}
-			return block.getOutput(OUTPUT_NAME);
-		}
+		addStreamToCPU("C") <== TileMultiplierKernel.multiplyTiles(this, "TM", type, tileSize, tileSize, a, b);
 	}
 
 	private void configBuild(GemmEngineParameters params) {

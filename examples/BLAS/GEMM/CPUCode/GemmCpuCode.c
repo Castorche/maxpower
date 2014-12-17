@@ -6,7 +6,6 @@
 
 #include "DGEMM.h"
 
-#define NUM_TMS   DGEMM_numTileMultipliers
 #define TILE_SIZE DGEMM_tileSize
 #define FREQUENCY DGEMM_frequency
 
@@ -113,20 +112,8 @@ void dgemm(
 	}
 
 	max_actions_t* actions = max_actions_init(maxfile, NULL);
-	for (size_t i = 0; i < NUM_TMS; ++i) {
-		char name[128];
-		snprintf(name, sizeof(name), "TileMultiplier%zu", i);
-
-		max_set_ticks(actions, name, (numTiles+1) * tileSize2D);
-		max_set_uint64t(actions, name, "numTiles", numTiles);
-	}
-
-	if (NUM_TMS > 1) {
-		max_set_ticks(actions, "RoundRobinA", numTiles * tileSize2D);
-		max_set_ticks(actions, "RoundRobinB", numTiles * tileSize2D);
-	}
-
-	max_set_ticks(actions, "Adder", numTiles * tileSize2D);
+	max_set_ticks(actions, "TM", (numTiles+1) * tileSize2D);
+	max_set_uint64t(actions, "TM", "numTiles", numTiles);
 
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		for (size_t nn = 0; nn < nTiles; ++nn) {

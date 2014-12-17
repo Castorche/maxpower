@@ -13,7 +13,6 @@ public class GemmEngineParameters extends EngineParameters {
 	private static final String s_hasStreamStatus = "hasStreamStatus";
 	private static final String s_frequency       = "frequency";
 	private static final String s_tileSize        = "tileSize";
-	private static final String s_tileMultipliers = "tileMultipliers";
 	private static final String s_precision       = "precision";
 
 	public GemmEngineParameters(String[] args) {
@@ -26,7 +25,6 @@ public class GemmEngineParameters extends EngineParameters {
 		declareParam(s_hasStreamStatus, DataType.BOOL, false);
 		declareParam(s_frequency, DataType.INT, 150);
 		declareParam(s_tileSize, DataType.INT, 16);
-		declareParam(s_tileMultipliers, DataType.INT, 4);
 		declareParam(s_precision, Precision.class, Precision.DOUBLE);
 	}
 
@@ -52,10 +50,6 @@ public class GemmEngineParameters extends EngineParameters {
 		return getParam(s_tileSize);
 	}
 
-	public int getNumTileMultipliers() {
-		return getParam(s_tileMultipliers);
-	}
-
 	private Precision getPrecision() {
 		return getParam(s_precision);
 	}
@@ -72,7 +66,6 @@ public class GemmEngineParameters extends EngineParameters {
 	public String getBuildName() {
 		return getMaxFileName()
 				+ "_" + getTarget() + "_ss" + hasStreamStatus() + "_sf" + getFrequency()
-				+ "_ts" + getTileSize() + "_tm" + getNumTileMultipliers()
-				+ (getTag().isEmpty() ? "" : ("_" + getTag()));
+				+ "_ts" + getTileSize() + (getTag().isEmpty() ? "" : ("_" + getTag()));
 	}
 }
