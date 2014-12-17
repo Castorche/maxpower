@@ -174,6 +174,10 @@ static struct timespec diff(struct timespec start, struct timespec finish) {
 int main() {
 	dgemm_init();
 
+	unsigned seed = time(NULL);
+	printf("Random seed: %u\n", seed);
+	srand(seed);
+
 	const int m = random() % (5 * TILE_SIZE);
 	const int n = random() % (5 * TILE_SIZE);
 	const int k = random() % (5 * TILE_SIZE);
