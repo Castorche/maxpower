@@ -173,16 +173,40 @@ static struct timespec diff(struct timespec start, struct timespec finish) {
 	return diff;
 }
 
-int main() {
+static int check_result(int m, int n, const double* expected, const double* actual) {
+	for (int i = 0; i < m; ++i) {
+		for (int j = 0; j < n; ++j) {
+			int idx = i*n + j;
+			if (expected[idx] != actual[idx]) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+int main(int argc, char** argv) {
 	dgemm_init();
 
 	unsigned seed = time(NULL);
 	printf("Random seed: %u\n", seed);
 	srand(seed);
 
-	const int m = random() % (5 * TILE_SIZE);
-	const int n = random() % (5 * TILE_SIZE);
-	const int k = random() % (5 * TILE_SIZE);
+	int m;
+	int n;
+	int k;
+
+	if (argc == 1) {
+		m = random() % (5 * TILE_SIZE);
+		n = random() % (5 * TILE_SIZE);
+		k = random() % (5 * TILE_SIZE);
+	} else if (argc == 2) {
+		m = n = k = atoi(argv[1]);
+	} else {
+		printf("Usage: %s [size]\n", argv[0]);
+		exit(1);
+	}
+
 	double* A   = calloc(m * k, sizeof(double));
 	double* B   = calloc(k * n, sizeof(double));
 	double* Csw = calloc(m * n, sizeof(double));
@@ -198,11 +222,11 @@ int main() {
 	printf("DFE compute dimensions: m = %zu, n = %zu, k = %zu\n",
 			mTiles * TILE_SIZE, nTiles * TILE_SIZE, kTiles * TILE_SIZE);
 
-	size_t cpuPoints = m * n * k;
-	size_t dfePoints = mTiles * nTiles * kTiles * TILE_SIZE * TILE_SIZE * TILE_SIZE;
-	printf("DFE compute efficiency: %f\n", ((double) cpuPoints) / dfePoints);
+	double cpuPoints = ((double) m) * n * k;
+	double dfePoints = ((double) mTiles) * nTiles * kTiles * TILE_SIZE * TILE_SIZE * TILE_SIZE;
+	printf("DFE compute efficiency: %f\n", cpuPoints / dfePoints);
 	printf("DFE frequency: %d MHz\n", FREQUENCY);
-	printf("DFE predicted compute time: %f s\n", ((double) dfePoints) / (((double) TILE_SIZE) * FREQUENCY * 1000000));
+	printf("DFE predicted compute time: %f s\n", dfePoints / (((double) TILE_SIZE) * FREQUENCY * 1000000));
 
 	for (int i = 0; i < m*k; ++i) {
 		A[i] = random() % 100;
@@ -224,7 +248,19 @@ int main() {
 	struct timespec start;
 	struct timespec finish;
 
-	printf("Running SW... ");
+	printf("Running HW... "); fflush(stdout);
+	clock_gettime(CLOCK_REALTIME, &start);
+	dgemm("n", "n", m, n, k, alpha, A, k, B, n, beta, Chw, n);
+	clock_gettime(CLOCK_REALTIME, &finish);
+
+	struct timespec hw_time  = diff(start, finish);
+	struct timespec dfe_time = diff(run_start, run_finish);
+	struct timespec cpu_time = diff(dfe_time, hw_time);
+
+	printf("took: %ld.%09ld s (DFE time: %ld.%09ld s, CPU time: %ld.%09ld s)\n",
+			hw_time.tv_sec, hw_time.tv_nsec, dfe_time.tv_sec, dfe_time.tv_nsec, cpu_time.tv_sec, cpu_time.tv_nsec);
+
+	printf("Running SW... "); fflush(stdout);
 	clock_gettime(CLOCK_REALTIME, &start);
 	dgemm_model("n", "n", m, n, k, alpha, A, k, B, n, beta, Csw, n);
 	clock_gettime(CLOCK_REALTIME, &finish);
@@ -233,27 +269,9 @@ int main() {
 
 	printf("took: %ld.%09ld s\n", sw_time.tv_sec, sw_time.tv_nsec);
 
-	printf("Running HW... ");
-	clock_gettime(CLOCK_REALTIME, &start);
-	dgemm("n", "n", m, n, k, alpha, A, k, B, n, beta, Chw, n);
-	clock_gettime(CLOCK_REALTIME, &finish);
-
-	struct timespec hw_time  = diff(start, finish);
-	struct timespec cpu_time = diff(diff(run_start, run_finish), hw_time);
-
-	printf("took: %ld.%09ld s (CPU time: %ld.%09ld s)\n",
-			hw_time.tv_sec, hw_time.tv_nsec, cpu_time.tv_sec, cpu_time.tv_nsec);
-
-	printf("Comparing results...\n");
-	for (int i = 0; i < m; ++i) {
-		for (int j = 0; j < n; ++j) {
-			int idx = i*n + j;
-
-			if (Csw[idx] != Chw[idx])
-				printf("Csw_ij = %f, Chw_ji = %f\n", Csw[idx], Chw[idx]);
-		}
-	}
-
+	printf("Comparing results... ");
+	int failed = check_result(m, n, Csw, Chw);
+	printf("%s\n", failed ? "WRONG" : "CORRECT");
 	printf("Done.\n");
-	return 0;
+	return failed;
 }
