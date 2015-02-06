@@ -3,15 +3,21 @@ package maxpower.blas.l3;
 import java.util.ArrayList;
 import java.util.List;
 
-import maxpower.kernel.TreeReduce;
 import maxpower.kernel.KernelBinaryOp.Add;
+import maxpower.kernel.TreeReduce;
 import maxpower.kernel.arithmetic.FloatingPointMultiAdder;
+import maxpower.kernel.arithmetic.FloatingPointMultiAdder.Optimization;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 
+/**
+ * A tile accumulator for dense matrix multiplication.
+ *
+ * @author Chris Jones
+ */
 public abstract class TileAccumulator extends KernelLib {
 	protected final int tileSize2D;
 	protected final DFEVar sumTiles;
@@ -45,7 +51,8 @@ public abstract class TileAccumulator extends KernelLib {
 		summands.addAll(inputs);
 
 		if (sum.getType() instanceof DFEFloat) {
-			FloatingPointMultiAdder adder = new FloatingPointMultiAdder(this, 2, true);
+			FloatingPointMultiAdder adder =
+				new FloatingPointMultiAdder(this, 1, false, Optimization.COND_ADD_SUB, Optimization.TRI_ADDER);
 			sum <== adder.compute(summands);
 		} else {
 			sum <== TreeReduce.reduce(new Add<DFEVar>(), summands);

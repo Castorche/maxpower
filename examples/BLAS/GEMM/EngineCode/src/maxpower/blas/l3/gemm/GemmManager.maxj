@@ -25,7 +25,7 @@ public class GemmManager extends CustomManager {
 		DFELink a = addStreamFromCPU("A");
 		DFELink b = addStreamFromCPU("B");
 
-		addStreamToCPU("C") <== TileMultiplierKernel.multiplyTiles(this, "TM", type, tileSize, tileSize, a, b);
+		addStreamToCPU("C") <== TileMultiplierKernel.multiplyTiles(this, "TM", type, tileSize, a, b);
 	}
 
 	private void configBuild(GemmEngineParameters params) {
