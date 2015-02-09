@@ -10,7 +10,26 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
-
+/**
+ * A much more efficient implementation of integer division by a constant denominator.
+ * This is particularly useful for small denominators such as 3 and 5. It will also handle
+ * check for powers of two first, so denominators so 6, 12, 24, etc. will use the same amount
+ * of resource as 3.
+ * <p>
+ * Example usage:
+ * <pre><code>
+ * DFEVar x = io.input("x");
+ * ConstDenominator denom = new ConstDenominator(3);
+ *
+ * optimization.pushRoundingMode(RoundingMode.TRUNCATE);
+ * DFEVar y = x / denom;
+ * optimization.popRoundingMode();
+ * </code></pre>
+ * <p>
+ * NB. This only supports truncate mode (and will throw an exception if not in truncate mode).
+ *
+ * @author Chris Jones
+ */
 public class ConstDenominator {
 	private static final int LUTSIZE = 64;
 	private static final int LUTBITS = MathUtils.bitsToAddress(LUTSIZE);
