@@ -47,15 +47,13 @@ static size_t sizeInTiles(size_t n) {
 max_file_t* maxfile;
 max_engine_t* engine;
 max_actions_t* actionsIn;
-max_actions_t* actionsOut0;
-max_actions_t* actionsOut1;
+max_actions_t* actionsOut[2];
 const max_handle_t* aHandle;
 const max_handle_t* bHandle;
 const max_handle_t* cHandle;
 double* aIn;
 double* bIn;
-double* cOut0;
-double* cOut1;
+double* cOut[2];
 
 void dgemm_init(size_t mMax, size_t nMax, size_t kMax) {
 	printf("Initializing maxfile...\n");
@@ -67,17 +65,17 @@ void dgemm_init(size_t mMax, size_t nMax, size_t kMax) {
 	printf("Loading engine...\n");
 	engine = max_load(maxfile, "*");
 
-	actionsIn   = max_actions_init(maxfile, NULL);
-	actionsOut0 = max_actions_init_explicit(maxfile);
-	actionsOut1 = max_actions_init_explicit(maxfile);
+	actionsIn     = max_actions_init(maxfile, NULL);
+	actionsOut[0] = max_actions_init_explicit(maxfile);
+	actionsOut[1] = max_actions_init_explicit(maxfile);
 
 	size_t mTiles = sizeInTiles(mMax);
 	size_t nTiles = sizeInTiles(nMax);
 	size_t kTiles = sizeInTiles(kMax);
-	aIn   = malloc(mTiles * kTiles * TILE_SIZE_2D * sizeof(double));
-	bIn   = malloc(kTiles * nTiles * TILE_SIZE_2D * sizeof(double));
-	cOut0 = malloc(kTiles * TILE_SIZE_2D * sizeof(double));
-	cOut1 = malloc(kTiles * TILE_SIZE_2D * sizeof(double));
+	aIn     = malloc(mTiles * kTiles * TILE_SIZE_2D * sizeof(double));
+	bIn     = malloc(kTiles * nTiles * TILE_SIZE_2D * sizeof(double));
+	cOut[0] = malloc(kTiles * TILE_SIZE_2D * sizeof(double));
+	cOut[1] = malloc(kTiles * TILE_SIZE_2D * sizeof(double));
 }
 
 void dgemm(
@@ -149,23 +147,21 @@ void dgemm(
 
 	max_run(engine, actionsIn);
 
-	max_clear_queues(actionsOut0);
-	max_queue_output_handle(actionsOut0, cHandle, cOut0, kTiles * TILE_SIZE_2D * sizeof(double));
-	max_sync_stream(actionsOut0, "C");
+	max_run_t* run[2];
+	for (size_t i = 0; i < 2; ++i) {
+		max_clear_queues(actionsOut[i]);
+		max_queue_output_handle(actionsOut[i], cHandle, cOut[i], kTiles * TILE_SIZE_2D * sizeof(double));
+		max_sync_stream(actionsOut[i], "C");
 
-	max_clear_queues(actionsOut1);
-	max_queue_output_handle(actionsOut1, cHandle, cOut1, kTiles * TILE_SIZE_2D * sizeof(double));
-	max_sync_stream(actionsOut1, "C");
-
-	max_run_t* run0 = max_run_nonblock(engine, actionsOut0);
-	max_run_t* run1 = NULL;
-	if (mTiles * nTiles > 1) run1 = max_run_nonblock(engine, actionsOut1);
+		run[i] = (mTiles * nTiles > i) ? max_run_nonblock(engine, actionsOut[i]) : NULL;
+	}
 
 	size_t tile = 2;
 	for (size_t mm = 0; mm < mTiles; ++mm) {
 		size_t xMax = min(TILE_SIZE, m - mm*TILE_SIZE);
 
 		for (size_t nn = 0; nn < nTiles; ++nn, ++tile) {
+			size_t sel  = tile & 1;
 			size_t yMax = min(TILE_SIZE, n - nn*TILE_SIZE);
 
 			for (size_t x = 0; x < xMax; ++x) {
@@ -177,8 +173,7 @@ void dgemm(
 				}
 			}
 
-			max_wait((tile & 1) ? run1 : run0);
-			const double* cOut = (tile & 1) ? cOut1 : cOut0;
+			max_wait(run[sel]);
 
 			for (size_t kk = 0; kk < kTiles; ++kk) {
 				for (size_t x = 0; x < xMax; ++x) {
@@ -186,18 +181,12 @@ void dgemm(
 
 					for (size_t y = 0; y < yMax; ++y) {
 						size_t col = nn*TILE_SIZE + y;
-						C[row*ldc+col] += alpha * cOut[TILE_SIZE_2D*kk + TILE_SIZE*x + y];
+						C[row*ldc+col] += alpha * cOut[sel][TILE_SIZE_2D*kk + TILE_SIZE*x + y];
 					}
 				}
 			}
 
-			if (tile < mTiles*nTiles) {
-				if (tile & 1) {
-					run1 = max_run_nonblock(engine, actionsOut1);
-				} else {
-					run0 = max_run_nonblock(engine, actionsOut0);
-				}
-			}
+			run[sel] = (tile < mTiles*nTiles) ? max_run_nonblock(engine, actionsOut[sel]) : NULL;
 		}
 	}
 }
