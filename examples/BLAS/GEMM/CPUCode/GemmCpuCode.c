@@ -158,7 +158,8 @@ void dgemm(
 	max_sync_stream(actionsOut1, "C");
 
 	max_run_t* run0 = max_run_nonblock(engine, actionsOut0);
-	max_run_t* run1 = max_run_nonblock(engine, actionsOut1);
+	max_run_t* run1 = NULL;
+	if (mTiles * nTiles > 1) run1 = max_run_nonblock(engine, actionsOut1);
 
 	size_t tile = 2;
 	for (size_t mm = 0; mm < mTiles; ++mm) {
