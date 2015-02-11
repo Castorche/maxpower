@@ -13,7 +13,7 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 /**
  * A much more efficient implementation of integer division by a constant denominator.
  * This is particularly useful for small denominators such as 3 and 5. It will also handle
- * check for powers of two first, so denominators so 6, 12, 24, etc. will use the same amount
+ * check for powers of two first, so denominators 6, 12, 24, etc. will use the same amount
  * of resource as 3.
  * <p>
  * Example usage:
