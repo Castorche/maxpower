@@ -80,14 +80,7 @@ public class ConstDenominator {
 
 		DFEType carryType = DFETypeFactory.dfeUInt(m_carryBits);
 
-		DFEVar[] lutContents = new DFEVar[LUTSIZE];
-		for (int i = 0; i < LUTSIZE; ++i) {
-			DFEType divisorType = DFETypeFactory.dfeUInt(m_chunkBits);
-			// prevent overflow warnings for invalid inputs
-			int divisor = Math.min(i / m_denom, (1 << m_chunkBits)-1);
-			// the carry goes in the least significant bits
-			lutContents[i] = owner.constant.var(divisorType, divisor) # owner.constant.var(carryType, i % m_denom);
-		}
+		DFEVar[] lutContents = getLutContents(owner);
 
 		DFEVar result = null;
 		DFEVar carry  = owner.constant.var(carryType, 0);
@@ -99,7 +92,6 @@ public class ConstDenominator {
 			// carry goes in most significant bits
 			DFEVar lookupAddrLsb = lhs.slice(sliceBase, sliceBits).cast(DFETypeFactory.dfeUInt(sliceBits)).cast(DFETypeFactory.dfeUInt(m_chunkBits));
 			DFEVar lookupAddr    = carry # lookupAddrLsb;
-
 			DFEVar lookup        = owner.control.mux(lookupAddr, lutContents);
 
 			carry  = lookup.slice(0, m_carryBits).cast(carryType);
@@ -107,8 +99,19 @@ public class ConstDenominator {
 			result = (result == null) ? divisor : (result # divisor);
 		}
 
-		result = result.cast(lhsType);
+		return result.cast(lhsType);
+	}
 
-		return result;
+	private DFEVar[] getLutContents(KernelLib owner) {
+		DFEType carryType = DFETypeFactory.dfeUInt(m_carryBits);
+		DFEVar[] lutContents = new DFEVar[LUTSIZE];
+		for (int i = 0; i < LUTSIZE; ++i) {
+			DFEType divisorType = DFETypeFactory.dfeUInt(m_chunkBits);
+			// prevent overflow warnings for invalid inputs
+			int divisor = Math.min(i / m_denom, (1 << m_chunkBits)-1);
+			// the carry goes in the least significant bits
+			lutContents[i] = owner.constant.var(divisorType, divisor) # owner.constant.var(carryType, i % m_denom);
+		}
+		return lutContents;
 	}
 }
