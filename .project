@@ -5,7 +5,7 @@
 	<manageMaxCompiler>false</manageMaxCompiler>
 	<manageMaxGenFD>false</manageMaxGenFD>
 	<manageMaxBlox>false</manageMaxBlox>
-	<maxelerVersion></maxelerVersion>
+	<maxelerVersion>1.0</maxelerVersion>
 	<maxelerBuildSystemVersion></maxelerBuildSystemVersion>
 	<projects>
 	</projects>
