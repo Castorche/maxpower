@@ -10,9 +10,6 @@ import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
  *
  * The front of the list is at index 0.
  *
- * The push, pop and peek methods make usage more idiomatic. It is recommended
- * that these not be combined with add / remove.
- *
  * It is the responsibility of the user to ensure that only one method affecting
  * state (push, pop, clear) is called on any given cycle. Otherwise, the resulting
  * state will be inconsistent. The pushPop method provided may assist in such instances.
