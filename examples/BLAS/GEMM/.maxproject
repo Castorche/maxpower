@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<maxCompilerManager version="2">
-<enginePart internalEngineSubproject="GEMM_EngineCode" isSrcBin="false" isUseDefaultSelected="false" outputLocation="/GEMM_EngineCode/bin" projectName="GEMM"/>
-<cpuPart internalCpuSubproject="GEMM_CPUCode"/>
-<watchedFiles/>
-</maxCompilerManager>
