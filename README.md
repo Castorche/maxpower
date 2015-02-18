@@ -22,4 +22,4 @@ Using MaxPower
 Contributing
 ------------
 
-Maxeler welcomes external contributions. If you have something you wish to contribute, feel free to fork this repository and submit a pull request for us to review.
+Maxeler welcomes external contributions. If you have something you wish to contribute, feel free to fork this repository and submit a pull request for us to review. Please review the MaxPower [Do's and Don'ts](https://github.com/maxeler/maxpower/wiki/Do's-and-Don'ts) wiki page.
