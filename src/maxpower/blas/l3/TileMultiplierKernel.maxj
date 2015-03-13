@@ -8,11 +8,24 @@ import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
 import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
 
+/**
+ * A kernel wrapping the tile multiplier library.
+ *
+ * @see TileMultiplier
+ * @author Chris Jones
+ */
 public class TileMultiplierKernel extends Kernel {
 	public static final String INPUT_A_NAME = "A";
 	public static final String INPUT_B_NAME = "B";
 	public static final String OUTPUT_NAME  = "C";
 
+	/**
+	 * Create a tile multipler.
+	 *
+	 * @param parameters  kernel parameters
+	 * @param type        matrix element type
+	 * @param N           size of tile in one dimension (tiles are NxN)
+	 */
 	public TileMultiplierKernel(KernelParameters parameters, DFEType type, int N) {
 		super(parameters);
 
@@ -27,6 +40,17 @@ public class TileMultiplierKernel extends Kernel {
 		io.output(OUTPUT_NAME, type) <== tm.getOutput();
 	}
 
+	/**
+	 * Matrix multiply the tiles on the given {@code DFELink}s
+	 *
+	 * @param manager  manager containing input streams
+	 * @param name     kernel name
+	 * @param type     matrix element type
+	 * @param N        size of tile in one dimension (tiles are NxN)
+	 * @param a        A input matrix stream (one element per cycle)
+	 * @param b        B input matrix stream (one element per cycle)
+	 * @return stream of multiplied tiles (one element per cycle)
+	 */
 	public static DFELink multiplyTiles(CustomManager manager, String name, DFEType type, int N, DFELink a, DFELink b) {
 		KernelBlock block = manager.addKernel(new TileMultiplierKernel(manager.makeKernelParameters(name), type, N));
 		block.getInput(INPUT_A_NAME) <== a;

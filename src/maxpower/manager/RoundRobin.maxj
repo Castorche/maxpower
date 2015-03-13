@@ -10,10 +10,25 @@ import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
 import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
 import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
 
+/**
+ * A simple kernel which will send input data to each of its outputs in sequence.
+ *
+ * @author Chris Jones
+ *
+ * @param <T> data type
+ */
 public class RoundRobin<T extends KernelObject<T>> extends Kernel {
 	public static final String INPUT_NAME = "din";
 	public static final String OUTPUT_NAME_PREFIX = "dout";
 
+	/**
+	 * Create a {@code RoundRobin} kernel.
+	 *
+	 * @param parameters  kernel parameters
+	 * @param wordType    input data word type
+	 * @param nOutputs    number of output streams
+	 * @param nWords      number of data words to send to an output before moving to next output
+	 */
 	public RoundRobin(KernelParameters parameters, KernelType<T> wordType, int nOutputs, int nWords) {
 		super(parameters);
 
@@ -27,6 +42,18 @@ public class RoundRobin<T extends KernelObject<T>> extends Kernel {
 			io.output(OUTPUT_NAME_PREFIX+i, wordType, output === i) <== din;
 	}
 
+	/**
+	 * Create a {@code RoundRobin} kernel with the specified {@code DFELink} connected to the input.
+	 *
+	 * @param <T> data type
+	 * @param manager   manager containing the input stream
+	 * @param name      name to give to {@code RoundRobin} kernel
+	 * @param wordType  input data word type
+	 * @param nOutputs  number of output streams
+	 * @param nWords    number of data words to send to an output before moving to next output
+	 * @param input     input stream
+	 * @return {@code DFELink} array of {@code RoundRobin} outputs
+	 */
 	public static <T extends KernelObject<T>>
 	DFELink[] roundRobin(CustomManager manager, String name, KernelType<T> wordType, int nOutputs, int nWords, DFELink input) {
 		DFELink[] output = new DFELink[nOutputs];

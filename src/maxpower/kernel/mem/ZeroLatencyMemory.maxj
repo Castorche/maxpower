@@ -16,10 +16,11 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.utils.MaxCompilerHide;
 
 /**
- * This memory implementation allows the write() arguments to depend on read() without any stream offset.
- * Data written with write() can be read() immediately on the following cycle.
+ * This memory implementation allows the {@code write()} arguments to depend on {@code read()} without any stream offset.
+ * Data written with {@code write()} can be {@code read()} immediately on the following cycle.
  *
  * NB: The data written in must be calculated within a single cycle.
  *
@@ -50,8 +51,8 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 
 		Count.Params params =
 			control.count.makeParams(MathUtils.bitsToRepresent(LOOP_LATENCY))
-		                 .withWrapMode(WrapMode.STOP_AT_MAX)
-		                 .withMax(LOOP_LATENCY);
+			             .withWrapMode(WrapMode.STOP_AT_MAX)
+			             .withMax(LOOP_LATENCY);
 
 		cycle = control.count.makeCounter(params).getCount();
 
@@ -60,10 +61,21 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 		getKernel().addKernelFinalizer(this);
 	}
 
+	/**
+	 * Create {@ZeroLatencyMemory} in fast on-chip memory.
+	 *
+	 * @param owner  containing {@code KernelLib}
+	 * @param type   stored type
+	 * @param depth  maximum number of values which can be stored
+	 * @return
+	 */
 	public static <T extends KernelObject<T>> ZeroLatencyMemory<T> alloc(KernelLib owner, KernelType<T> type, int depth) {
 		return new ZeroLatencyMemory<T>(owner, type, depth);
 	}
 
+	/**
+	 * @return value stored at specified address
+	 */
 	public T read(DFEVar address) {
 		// don't duplicate logic (or more importantly RAMs) for repeat reads at same address
 		if (reads.containsKey(address))
@@ -96,6 +108,11 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 		return dataOut;
 	}
 
+	/**
+	 * @param address  address at which to write data
+	 * @param data     data to be written
+	 * @param enable   data is written if enable is <tt>true</tt>
+	 */
 	public void write(DFEVar address, T data, DFEVar enable) {
 		if (hasWritten) throw new MaxCompilerAPIError("write() may only be called once");
 
@@ -111,10 +128,16 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 		hasWritten    =  true;
 	}
 
+	/**
+	 * Give the memory a name, allowing the CPU to write to or read from its contents.
+	 *
+	 * @param name  name used to access this memory in CPU code
+	 */
 	public void mapToCPU(String name) {
 		ram.mapToCPU(name);
 	}
 
+	@MaxCompilerHide
 	@Override
 	public void finalizeKernel(Kernel kernel_design) {
 		if (!hasWritten) throw new MaxCompilerAPIError("write() not called");

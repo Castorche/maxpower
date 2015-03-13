@@ -7,6 +7,11 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 
+/**
+ * {@code Kernel} binary operators for use with e.g. {@code TreeReduce}.
+ *
+ * @author Chris Jones
+ */
 public abstract class KernelBinaryOp {
 	public static class Add<T extends KernelObjectVectorizable<T, T>> implements AssociativeOp<T> {
 		@Override

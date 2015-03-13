@@ -15,22 +15,29 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 /**
- * A tile multiplier for dense matrix multiplication.
+ * A tile multiplier for use in dense matrix multiplication.
+ *
+ * NB. Supports only square tiles.
  *
  * @author Chris Jones
  */
 public class TileMultiplier extends KernelLib {
 	private final DFEVar output;
 
+	/**
+	 * Create a tile multiplier.
+	 *
+	 * @param N    size of tile in one dimension (tiles are NxN)
+	 * @param aIn  A input matrix values
+	 * @param bIn  B input matrix values
+	 */
 	public TileMultiplier(int N, DFEVar aIn, DFEVar bIn) {
 		super(aIn.getKernel());
 
 		CounterChain cc = control.count.makeCounterChain();
-		DFEVar tile = cc.addCounter(1 << 48, 1);
+		DFEVar oddTile = cc.addCounter(2, 1); // counter will wrap, giving 0, 1, 0, 1, ...
 		DFEVar i = cc.addCounter(N, 1);
 		DFEVar j = cc.addCounter(N, 1);
-
-		DFEVar oddTile = tile[0].cast(dfeBool());
 
 		DFEVar[] summands = new DFEVar[N];
 

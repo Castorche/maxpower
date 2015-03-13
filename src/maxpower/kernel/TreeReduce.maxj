@@ -9,6 +9,25 @@ import maxpower.ops.AssociativeOp;
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;
 
+/**
+ * A set of static methods to perform a reduction in a tree-like manner.
+ *
+ * Tree reduction incurs less scheduling resource cost than a naive reduction and the operations
+ * are performed with lower latency.
+ *
+ * Naive reduction       Tree reduction
+ *
+ *   a   b c d            a   b c   d
+ *    \ /  | |             \ /   \ /
+ *     x   | |              x     x
+ *      \ /  |               \   /
+ *       x   |                 x
+ *        \ /
+ *         x
+ *
+ * NB. For operations which are not strictly associative (e.g. floating-point addition), using tree
+ *     reduction may affect the result slightly as the order of operations is altered.
+ */
 public class TreeReduce {
 	public static <T extends KernelObjectVectorizable<T, T>> T reduce(AssociativeOp<T> op, T... inputs) {
 		return reduce(op, Arrays.asList(inputs));
