@@ -2,7 +2,7 @@
 <projectDescription>
 	<name>maxpower</name>
 	<comment></comment>
-	<manageMaxCompiler>false</manageMaxCompiler>
+	<manageMaxCompiler>true</manageMaxCompiler>
 	<manageMaxGenFD>false</manageMaxGenFD>
 	<manageMaxBlox>false</manageMaxBlox>
 	<maxelerVersion>1.0</maxelerVersion>
