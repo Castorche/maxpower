@@ -1,6 +1,10 @@
 package maxpower.kernel.arithmetic;
 
+import static org.junit.Assert.assertArrayEquals;
+
 import java.util.Random;
+
+import org.junit.Test;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
@@ -9,9 +13,18 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 
+/**
+ * Test ConstDominator for a range of different denominators.
+ *
+ * All of the different denominators a built into the same kernel to reduce
+ * the overhead of the simulation build.
+ *
+ * @author Chris Jones
+ */
 public class ConstDenominatorTest {
-	private static final int N = 1000;
+	private static final int N = 10000;
 
+	// use a mix of different denominators, including those with power of 2 factors, which require a shift
 	public static final int[] DENOMS = { 3, 5, 7, 9, 11, 13, 17, 21, 25, 31, 2, 4, 8, 64, 96, 192, 40, 80, 56 };
 
 	private static class ConstDenominatorTestKernel extends Kernel {
@@ -35,7 +48,8 @@ public class ConstDenominatorTest {
 		}
 	}
 
-	public static void main(String[] args) {
+	@Test
+	public void testRandom() {
 		double[] input    = new double[N];
 		double[] expected = new double[N];
 
@@ -58,9 +72,9 @@ public class ConstDenominatorTest {
 			m.setInputData("input", input);
 			m.logMsg("Running test for denom = %s...\n", denom);
 			m.run();
-			m.logMsg("Comparing output...");
-			m.checkOutputData("result", expected);
+
+			double[] actual = m.getOutputDataArray("result");
+			assertArrayEquals("denom_"+denom, expected, actual, 0);
 		}
-		m.logMsg("Test PASSED\n");
 	}
 }
