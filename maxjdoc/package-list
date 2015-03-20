@@ -1,0 +1,12 @@
+maxpower.blas.l3
+maxpower.hash
+maxpower.hash.functions
+maxpower.hash.mem
+maxpower.kernel
+maxpower.kernel.arithmetic
+maxpower.kernel.io
+maxpower.kernel.mem
+maxpower.kernel.pipeline
+maxpower.manager
+maxpower.ops
+maxpower.statemachine.collections
