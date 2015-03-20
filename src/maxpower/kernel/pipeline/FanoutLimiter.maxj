@@ -8,12 +8,10 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
  * maximum specified value.
  *
  * The construction of the tree is achieved in the KernelFinalizer.
- * @see {@link KFanoutLimiter}
+ * @see KFanoutLimiter
  */
 public class FanoutLimiter extends KFanoutLimiter<DFEVar> {
-
 	public FanoutLimiter(KernelLib owner, DFEVar x, int maxFanout) {
 		super(owner, x, maxFanout);
 	}
-
 }

@@ -4,17 +4,19 @@
 	<property environment="env"/>
 	<property name="bin.dir" location="bin"/>
 	<property name="report.dir" location="report"/>
-	
+	<property name="maxjdoc.dir" location="maxjdoc"/>
+
 	<taskdef name="maxjcompiler" classname="org.eclipse.jdt.core.ant.taskdef.MaxjTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar" onerror="ignore"/>
-	
+	<taskdef name="maxjdoc" classname="org.eclipse.jdt.core.ant.taskdef.MaxjDocTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar"/>
+
 	<condition property="maxeda.classpath" value="${env.MAXCOMPILERJCP}">
 		<isset property="env.MAXCOMPILERJCP"/>
 	</condition>
-	
+
 	<condition property="maxeda.classpath" value="${env.MAXCOMPILERDIR}/lib/MaxCompiler.jar">
 		<not><isset property="env.MAXCOMPILERJCP"/></not>
 	</condition>
-	
+
 	<path id="maxq.classpath">
 		<pathelement path="/network-raid/opt/maxq/maxq-ctl.jar"/>
 	</path>
@@ -22,7 +24,7 @@
 	<path id="main.classpath">
 		<pathelement location="${maxeda.classpath}"/>
 	</path>
-	
+
 	<path id="test.classpath">
 		<path refid="main.classpath"/>
 		<pathelement location="${env.MAXCOMPILERDIR}/lib/MaxIDE/plugins/org.junit4/junit.jar"/>
@@ -30,7 +32,7 @@
 		<pathelement location="${bin.dir}"/>
 	</path>
 
-	<target name="all" depends="build, build-test, test"/>
+	<target name="all" depends="build, build-test, test, maxjdoc"/>
 
 	<target name="build" depends="clean">
 		<echo>
@@ -57,7 +59,7 @@ Using maxeda classpath '${maxeda.classpath}'
 			<classpath refid="test.classpath"/>
 		</maxjcompiler>
 	</target>
-	
+
 	<target name="test" depends="build-test">
 		<mkdir dir="${report.dir}"/>
 		<junit haltonfailure="no" failureproperty="junit.failed">
@@ -71,8 +73,31 @@ Using maxeda classpath '${maxeda.classpath}'
 		<fail message="A JUnit test FAILED" if="junit.failed"/>
 	</target>
 
+	<path id="main.src">
+		<fileset dir="src" defaultexcludes="yes">
+			<include name="**/*.java"/>
+			<include name="**/*.maxj"/>
+		</fileset>
+	</path>
+
+	<target name="maxjdoc">
+		<mkdir dir="${maxjdoc.dir}"/>
+		<maxjdoc
+			package="maxpower.*"
+			sourcepathref="main.src"
+			destdir="${maxjdoc.dir}"
+			classpathref="main.classpath"
+			author="false"
+			doctitle="MaxPower MaxJ API"
+			source="1.6"
+			use="true"
+			version="true"
+			failonerror="true"/>
+	</target>
+
 	<target name="clean">
 		<delete dir="${bin.dir}"/>
 		<delete dir="${report.dir}"/>
+		<delete dir="${maxjdoc.dir}"/>
 	</target>
 </project>
