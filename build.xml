@@ -32,7 +32,7 @@
 		<pathelement location="${bin.dir}"/>
 	</path>
 
-	<target name="all" depends="compile, compile-test, test, jacoco"/>
+	<target name="all" depends="compile, compile-test, test"/>
 
 	<target name="compile" depends="clean">
 		<echo>
@@ -62,6 +62,19 @@ Using maxeda classpath '${maxeda.classpath}'
 
 	<target name="test" depends="compile-test">
 		<mkdir dir="${report.dir}"/>
+		<junit haltonfailure="no" failureproperty="junit.failed">
+			<classpath refid="test.classpath"/>
+			<formatter type="plain" usefile="false"/>
+			<formatter type="xml"/>
+			<batchtest todir="${report.dir}">
+				<fileset dir="${bin.dir}" includes="**/*Test.class"/>
+			</batchtest>
+		</junit>
+		<fail message="A JUnit test FAILED" if="junit.failed"/>
+	</target>
+
+	<target name="jacoco" depends="compile-test">
+		<mkdir dir="${report.dir}"/>
 		<jacoco:coverage destfile="${jacoco.exec.file}">
 			<junit haltonfailure="no" failureproperty="junit.failed" fork="true" forkmode="once">
 				<classpath refid="test.classpath"/>
@@ -73,9 +86,7 @@ Using maxeda classpath '${maxeda.classpath}'
 			</junit>
 		</jacoco:coverage>
 		<fail message="A JUnit test FAILED" if="junit.failed"/>
-	</target>
-
-	<target name="jacoco" depends="test">
+		
 		<jacoco:report>
 			<executiondata>
 				<file file="${jacoco.exec.file}"/>
