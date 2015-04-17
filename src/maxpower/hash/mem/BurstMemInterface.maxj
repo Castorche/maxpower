@@ -112,7 +112,10 @@ abstract class BurstMemInterface extends MemInterface {
 		MaxHash<?> owner = getOwner();
 		DFEVectorType<DFEVar> burstType = new DFEVectorType<DFEVar>(DFETypeFactory.dfeUInt(getEntrySize()), getNumEntriesPerBurst());
 		DFEVector<DFEVar> memReadDataVector = burstType.unpack(getBurstData(ctrl, buffer).slice(0, burstType.getTotalBits()));
-		DFEVar memReadData = owner.control.mux(addressInBurst, memReadDataVector.getElementsAsList());
+		DFEVar memReadData =
+			addressInBurst.getType().isConcreteType() ?
+				owner.control.mux(addressInBurst, memReadDataVector.getElementsAsList()) :
+				memReadDataVector.get(0);
 		DFEVar memReadDataSliced = memReadData.slice(0, getStructType().getTotalBits());
 
 		owner.simPrintf(ctrl, "  memReadData: 0x%x\n", memReadData);
