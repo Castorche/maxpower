@@ -1,11 +1,13 @@
 package maxpower.kernel.io;
 
+import static org.junit.Assert.assertEquals;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
-import maxpower.kernel.io.ZeroLatencyInput;
+import org.junit.Test;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
@@ -17,13 +19,17 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStruct;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
-import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager;
-import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager.DualSimMode;
+import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 import com.maxeler.maxcompiler.v2.utils.Bits;
 
-// TODO JUnit
+/**
+ * Test with a realistic example usage of run-length decoding,
+ * ie. where repeated items are compressed as data + number of repeats
+ *
+ * @author Chris Jones
+ */
 public class ZLIRunLengthDecoderTest {
-	private static final int N = 1000; // number of data items
+	private static final int N = 100000; // number of data items
 
 	private static final DFEType intType = DFETypeFactory.dfeInt(32);
 	private static final DFEStructType rleType =
@@ -32,9 +38,11 @@ public class ZLIRunLengthDecoderTest {
 				DFEStructType.sft("data", intType)
 			);
 
-	static class ZLIRunLengthDecoderTestKernel extends Kernel {
+	private static final String INPUT_NAME  = "din";
+	private static final String OUTPUT_NAME = "dout";
 
-		protected ZLIRunLengthDecoderTestKernel(KernelParameters parameters) {
+	private static class ZLIRunLengthDecoderTestKernel extends Kernel {
+		ZLIRunLengthDecoderTestKernel(KernelParameters parameters) {
 			super(parameters);
 
 			/*
@@ -44,25 +52,27 @@ public class ZLIRunLengthDecoderTest {
 			DFEVar  enable = dfeBool().newInstance(this);
 			DFEVar _enable = stream.offset(enable, -1); // first cycle value (true) comes from streamHold reset below
 
-			DFEStruct rleInput = ZeroLatencyInput.input("rle_in", rleType, _enable);
+			DFEStruct input = ZeroLatencyInput.input(INPUT_NAME, rleType, _enable);
 
-			Params params = control.count.makeParams(32).withMax((DFEVar) rleInput.get("repeats"));
+			Params params = control.count.makeParams(32).withMax((DFEVar) input.get("repeats"));
 			Counter count = control.count.makeCounter(params);
 
 			enable <== Reductions.streamHold(count.getWrap(), constant.var(true), dfeBool().encodeConstant(true));
 
-			io.output("rle_out", intType) <== (DFEVar) rleInput.get("data");
+			io.output(OUTPUT_NAME, intType) <== (DFEVar) input.get("data");
 		}
 	}
 
-	public static void main(String[] args) {
-		_DualSimulationManager m = new _DualSimulationManager("ZLIRunLengthDecoderTest", DualSimMode.PARALLEL);
-		m.setKernels(new ZLIRunLengthDecoderTestKernel(m.makeKernelParameters_A()),
-			new ZLIRunLengthDecoderTestKernel(m.makeKernelParameters_B()));
+	@Test
+	public void testZLIRunLengthDecoder() {
+		SimulationManager m = new SimulationManager("ZLIRunLengthDecoderTest");
+		m.setKernel(new ZLIRunLengthDecoderTestKernel(m.makeKernelParameters()));
 
-		Random rng = new Random();
+		long seed = System.currentTimeMillis();
+		m.logMsg("Using random seed: %d", seed);
+		Random rng = new Random(seed);
 
-		List<Double> expOutput = new ArrayList<Double>(5*N);
+		List<Double> expected = new ArrayList<Double>(5*N);
 
 		int cycles = 0;
 		Bits[] rleInput = new Bits[N];
@@ -75,22 +85,16 @@ public class ZLIRunLengthDecoderTest {
 			rleInput[i] = rleType.encodeConstant(fields);
 
 			for (int n = 0; n < repeats; ++n)
-				expOutput.add((double) data);
+				expected.add((double) data);
 			cycles += repeats;
 		}
 
-		m.setInputDataRaw("rle_in", rleInput);
-
-		m.setScalarInput("rle_in_ZLI_inputLength", N);
-
+		m.setInputDataRaw(INPUT_NAME, rleInput);
+		m.setScalarInput(INPUT_NAME+"_ZLI_inputLength", N);
 		m.setKernelCycles(cycles);
 		m.runTest();
 
-		double[] expOutputArray = new double[expOutput.size()];
-		for (int i = 0; i < expOutput.size(); ++i)
-			expOutputArray[i] = expOutput[i];
-
-		m.checkOutputData("rle_out", expOutputArray);
-		m.logMsg("Test PASSED");
+		List<Double> actual = m.getOutputData(OUTPUT_NAME);
+		assertEquals("output", expected, actual);
 	}
 }
