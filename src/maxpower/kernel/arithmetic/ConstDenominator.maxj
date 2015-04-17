@@ -1,0 +1,117 @@
+package maxpower.kernel.arithmetic;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.RoundingMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFix;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFix.SignMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+/**
+ * A much more efficient implementation of integer division by a constant denominator.
+ * This is particularly useful for small denominators such as 3 and 5. It will also handle
+ * check for powers of two first, so denominators 6, 12, 24, etc. will use the same amount
+ * of resource as 3.
+ * <p>
+ * Example usage:
+ * <pre><code>
+ * DFEVar x = io.input("x");
+ * ConstDenominator denom = new ConstDenominator(3);
+ *
+ * optimization.pushRoundingMode(RoundingMode.TRUNCATE);
+ * DFEVar y = x / denom;
+ * optimization.popRoundingMode();
+ * </code></pre>
+ * <p>
+ * NB. This only supports truncate mode (and will throw an exception if not in truncate mode).
+ *
+ * @author Chris Jones
+ */
+public class ConstDenominator {
+	private static final int LUTSIZE = 64;
+	private static final int LUTBITS = MathUtils.bitsToAddress(LUTSIZE);
+
+	private final int m_denom;
+
+	private final int m_carryBits;
+	private final int m_chunkBits;
+
+	public ConstDenominator(int denom) {
+		if (! (denom > 0))
+			throw new MaxCompilerAPIError("Denominator must be a positive integer.");
+
+		m_denom     = denom;
+		m_carryBits = MathUtils.bitsToAddress(denom);
+		// we divide our input into chunks of this size
+		m_chunkBits = LUTBITS - m_carryBits;
+	}
+
+	public DFEVar divAsRHS(DFEVar lhs) {
+		if (! (lhs.getType() instanceof DFEFix))
+			throw new MaxCompilerAPIError("Only fixed point numerators supported.");
+
+		KernelLib owner = lhs.getKernel();
+
+		if (owner.optimization.getRoundingMode() != RoundingMode.TRUNCATE)
+			throw new MaxCompilerAPIError("Only truncate rounding mode supported.");
+
+		DFEFix lhsType = (DFEFix) lhs.getType();
+		if (lhsType.getSignMode() != SignMode.UNSIGNED)
+			throw new MaxCompilerAPIError("Only unsigned numerators supported.");
+
+		if (m_denom == 1)
+			return lhs;
+
+		// can we reduce resource usage further by performing a shift first
+		if (m_denom % 2 == 0) {
+			int   newSize = lhs.getType().getTotalBits()-1;
+			DFEFix newType = DFETypeFactory.dfeFixOffset(newSize, lhsType.getOffset(), SignMode.UNSIGNED);
+			return (lhs.slice(1, newSize).cast(newType) / new ConstDenominator(m_denom/2)).cast(lhsType);
+		}
+
+		if (m_carryBits >= LUTBITS)
+			// denom too big for this method - revert to standard division
+			return (lhs / m_denom);
+
+		int chunks = MathUtils.ceilDivide(lhsType.getTotalBits(), m_chunkBits);
+
+		DFEType carryType = DFETypeFactory.dfeUInt(m_carryBits);
+
+		DFEVar[] lutContents = getLutContents(owner);
+
+		DFEVar result = null;
+		DFEVar carry  = owner.constant.var(carryType, 0);
+		for (int i = 0; i < chunks; ++i) {
+			int sliceBase = (chunks - i - 1) * m_chunkBits;
+			int sliceLast = Math.min((chunks - i) * m_chunkBits, lhs.getType().getTotalBits()); // exclusive
+			int sliceBits = sliceLast - sliceBase;
+
+			// carry goes in most significant bits
+			DFEVar lookupAddrLsb = lhs.slice(sliceBase, sliceBits).cast(DFETypeFactory.dfeUInt(sliceBits)).cast(DFETypeFactory.dfeUInt(m_chunkBits));
+			DFEVar lookupAddr    = carry # lookupAddrLsb;
+			DFEVar lookup        = owner.control.mux(lookupAddr, lutContents);
+
+			carry  = lookup.slice(0, m_carryBits).cast(carryType);
+			DFEVar divisor = lookup.slice(m_carryBits, sliceBits);
+			result = (result == null) ? divisor : (result # divisor);
+		}
+
+		return result.cast(lhsType);
+	}
+
+	private DFEVar[] getLutContents(KernelLib owner) {
+		DFEType carryType = DFETypeFactory.dfeUInt(m_carryBits);
+		DFEVar[] lutContents = new DFEVar[LUTSIZE];
+		for (int i = 0; i < LUTSIZE; ++i) {
+			DFEType divisorType = DFETypeFactory.dfeUInt(m_chunkBits);
+			// prevent overflow warnings for invalid inputs
+			int divisor = Math.min(i / m_denom, (1 << m_chunkBits)-1);
+			// the carry goes in the least significant bits
+			lutContents[i] = owner.constant.var(divisorType, divisor) # owner.constant.var(carryType, i % m_denom);
+		}
+		return lutContents;
+	}
+}

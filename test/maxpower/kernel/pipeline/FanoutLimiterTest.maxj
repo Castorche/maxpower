@@ -1,6 +1,6 @@
 package maxpower.kernel.pipeline;
 
-import maxpower.kernel.pipeline.FanoutLimiter;
+import org.junit.Test;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
@@ -11,29 +11,28 @@ import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 /**
  * Minimalist test: does it compile and run something? Anything? Don't even check the answer.
  */
-public class FanoutLimiterTest extends Kernel {
+public class FanoutLimiterTest {
+	static class FanoutLimiterTestKernel extends Kernel {
+		public FanoutLimiterTestKernel(KernelParameters parameters) {
+			super(parameters);
 
-	private final FanoutLimiter fl;
+			DFEVar in =io.input("input", dfeUInt(32));
+			FanoutLimiter fl = new FanoutLimiter(this, in, 3);
 
-	protected FanoutLimiterTest(KernelParameters parameters) {
-		super(parameters);
+			DFEVar sum = fl.get();
+			int nb = 10;
+			for(int i = 1; i < nb; ++i) {
+				sum = sum + stream.offset(fl.get(), i);
+			}
 
-		DFEVar in =io.input("input", dfeUInt(32));
-		fl = new FanoutLimiter(this, in, 3);
-
-		DFEVar sum = fl.get();
-		int nb = 10;
-		for(int i = 1; i < nb; ++i) {
-			sum = sum + stream.offset(fl.get(), i);
+			io.output("output", dfeUInt(32)) <== sum;
 		}
-
-		io.output("output", dfeUInt(32)) <== sum;
 	}
 
-	public static void main(String[] args) {
+	@Test
+	public void testSuccessfulBuild() {
 		SimulationManager mgr = new SimulationManager("FanoutLimiterTest", SimulationParams.HDLSIM);
-		FanoutLimiterTest ker = new FanoutLimiterTest(mgr.makeKernelParameters());
-		mgr.setKernel(ker);
+		mgr.setKernel(new FanoutLimiterTestKernel(mgr.makeKernelParameters()));
 
 		int size = 20;
 		double input[] = new double[size];

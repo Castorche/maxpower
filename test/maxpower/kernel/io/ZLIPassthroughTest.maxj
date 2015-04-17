@@ -1,10 +1,12 @@
 package maxpower.kernel.io;
 
+import static org.junit.Assert.assertEquals;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-import maxpower.kernel.io.ZeroLatencyInput;
+import org.junit.Test;
 
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
@@ -12,12 +14,16 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.Reductions;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
-import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager;
-import com.maxeler.maxcompiler.v2.managers.standard._DualSimulationManager.DualSimMode;
+import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 
-// TODO JUnit
+/**
+ * Test that ZeroLatencyInput behaviour matches that of a normal input
+ * in the case of a basic passthough.
+ *
+ * @author Chris Jones
+ */
 public class ZLIPassthroughTest {
-	private static final int N = 10000; // length of test input data
+	private static final int N = 100000; // length of test input data
 
 	static class ZLIPassthroughTestKernel extends Kernel {
 
@@ -39,13 +45,14 @@ public class ZLIPassthroughTest {
 		}
 	}
 
-	public static void main(String[] args) {
-		_DualSimulationManager m = new _DualSimulationManager("ZLIPassthroughTest", DualSimMode.PARALLEL);
+	@Test
+	public void testPassthrough() {
+		SimulationManager m = new SimulationManager("ZLIPassthroughTest");
+		m.setKernel(new ZLIPassthroughTestKernel(m.makeKernelParameters()));
 
-		m.setKernels(new ZLIPassthroughTestKernel(m.makeKernelParameters_A()),
-			new ZLIPassthroughTestKernel(m.makeKernelParameters_B()));
-
-		Random rng = new Random(1234);
+		long seed = System.currentTimeMillis();
+		m.logMsg("Using random seed: %d", seed);
+		Random rng = new Random(seed);
 
 		double[] input = new double[N];
 		for (int i = 0; i < N; ++i)
@@ -69,14 +76,8 @@ public class ZLIPassthroughTest {
 
 		m.runTest();
 
-		double[] std_out = m.getOutputDataArray("std_out");
-//		double[] zli_out = m.getOutputDataArray("zli_out");
-//
-//		for (int i = 0; i < std_out.length; ++i)
-//			m.logMsg("std: %d, zli: %d\n", (int)std_out[i], (int)zli_out[i]);
-
-		m.checkOutputData("zli_out", std_out);
-
-		m.logMsg("Test PASSED");
+		List<Double> expected = m.getOutputData("std_out");
+		List<Double> actual   = m.getOutputData("zli_out");
+		assertEquals("output", expected, actual);
 	}
 }

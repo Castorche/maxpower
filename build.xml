@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<project name ="MaxPower" default="all" basedir=".">
+<project xmlns:jacoco="antlib:org.jacoco.ant" name="MaxPower" default="all" basedir=".">
 	<property environment="env"/>
 	<property name="bin.dir" location="bin"/>
 	<property name="report.dir" location="report"/>
 	<property name="maxjdoc.dir" location="maxjdoc"/>
+	<property name="jacoco.exec.file" location="${report.dir}/jacoco.exec"/>
 
 	<taskdef name="maxjcompiler" classname="org.eclipse.jdt.core.ant.taskdef.MaxjTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar" onerror="ignore"/>
 	<taskdef name="maxjdoc" classname="org.eclipse.jdt.core.ant.taskdef.MaxjDocTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar"/>
+
+	<taskdef uri="antlib:org.jacoco.ant" resource="org/jacoco/ant/antlib.xml">
+		<classpath location="${env.JACOCODIR}/lib/jacocoant.jar"/>
+	</taskdef>
 
 	<condition property="maxeda.classpath" value="${env.MAXCOMPILERJCP}">
 		<isset property="env.MAXCOMPILERJCP"/>
@@ -17,10 +22,6 @@
 		<not><isset property="env.MAXCOMPILERJCP"/></not>
 	</condition>
 
-	<path id="maxq.classpath">
-		<pathelement path="/network-raid/opt/maxq/maxq-ctl.jar"/>
-	</path>
-
 	<path id="main.classpath">
 		<pathelement location="${maxeda.classpath}"/>
 	</path>
@@ -29,12 +30,20 @@
 		<path refid="main.classpath"/>
 		<pathelement location="${env.MAXCOMPILERDIR}/lib/MaxIDE/plugins/org.junit4/junit.jar"/>
 		<pathelement location="${env.MAXCOMPILERDIR}/lib/MaxIDE/plugins/org.hamcrest.core_1.1.0.v20090501071000.jar"/>
+		<pathelement location="${env.JACOCODIR}/lib/jacocoagent.jar"/>
 		<pathelement location="${bin.dir}"/>
 	</path>
 
-	<target name="all" depends="build, build-test, test, maxjdoc"/>
+	<path id="main.src">
+		<fileset dir="src" defaultexcludes="yes">
+			<include name="**/*.java"/>
+			<include name="**/*.maxj"/>
+		</fileset>
+	</path>
 
-	<target name="build" depends="clean">
+	<target name="all" depends="compile, compile-test, test, maxjdoc"/>
+
+	<target name="compile" depends="clean">
 		<echo>
 Using maxeda classpath '${maxeda.classpath}'
   (Precedence: 1. $MAXCOMPILERJCP, 2. $MAXCOMPILERDIR)
@@ -47,7 +56,7 @@ Using maxeda classpath '${maxeda.classpath}'
 		</maxjcompiler>
 	</target>
 
-	<target name="build-test" depends="build">
+	<target name="compile-test" depends="compile">
 		<echo>
 Using maxeda classpath '${maxeda.classpath}'
   (Precedence: 1. $MAXCOMPILERJCP, 2. $MAXCOMPILERDIR)
@@ -60,7 +69,7 @@ Using maxeda classpath '${maxeda.classpath}'
 		</maxjcompiler>
 	</target>
 
-	<target name="test" depends="build-test">
+	<target name="test" depends="compile-test">
 		<mkdir dir="${report.dir}"/>
 		<junit haltonfailure="no" failureproperty="junit.failed">
 			<classpath refid="test.classpath"/>
@@ -73,12 +82,35 @@ Using maxeda classpath '${maxeda.classpath}'
 		<fail message="A JUnit test FAILED" if="junit.failed"/>
 	</target>
 
-	<path id="main.src">
-		<fileset dir="src" defaultexcludes="yes">
-			<include name="**/*.java"/>
-			<include name="**/*.maxj"/>
-		</fileset>
-	</path>
+	<target name="jacoco" depends="compile-test">
+		<mkdir dir="${report.dir}"/>
+		<jacoco:coverage destfile="${jacoco.exec.file}">
+			<junit haltonfailure="no" failureproperty="junit.failed" fork="true" forkmode="once">
+				<classpath refid="test.classpath"/>
+				<formatter type="plain" usefile="false"/>
+				<formatter type="xml"/>
+				<batchtest todir="${report.dir}">
+					<fileset dir="${bin.dir}" includes="**/*Test.class"/>
+				</batchtest>
+			</junit>
+		</jacoco:coverage>
+		<fail message="A JUnit test FAILED" if="junit.failed"/>
+		
+		<jacoco:report>
+			<executiondata>
+				<file file="${jacoco.exec.file}"/>
+			</executiondata>
+			<structure name="MaxPower JaCoCo">
+				<classfiles>
+					<fileset dir="${bin.dir}"/>
+				</classfiles>
+				<sourcefiles encoding="UTF-8">
+					<fileset dir="src"/>
+				</sourcefiles>
+			</structure>
+			<html destdir="${report.dir}/jacoco"/>
+		</jacoco:report>
+	</target>
 
 	<target name="maxjdoc">
 		<mkdir dir="${maxjdoc.dir}"/>
