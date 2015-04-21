@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define ATTRIB_PACKED __attribute__((packed))
+
 enum lmem_cmd_code_e {
 	NOP = 0,
 	ClearFlag = 1,
@@ -19,7 +21,7 @@ enum lmem_cmd_code_e {
 	BlockUntilFlagCleared = 5
 };
 
-struct normal_mode {
+struct ATTRIB_PACKED normal_mode {
    uint32_t address : 28;
    uint32_t : 3;
    uint32_t echo_command : 1;
@@ -28,14 +30,14 @@ struct normal_mode {
    uint8_t inc_mode : 1;
 };
 
-struct control_mode {
+struct ATTRIB_PACKED control_mode {
    uint32_t flag_id;
    uint8_t mode; // = 0
    uint8_t code : 3; // 0 Nop, 2 SetFlag, 1 ClearFlag, 3 spare, 4 BlockUntilFlagSet, 5 BlockUntilFlagCleared, 6 spare, 7 spare
    uint8_t : 5;
 };
 
-typedef struct lmem_cmd_s  {
+typedef struct ATTRIB_PACKED lmem_cmd_s  {
     union  {
        struct normal_mode normal;
        struct control_mode cmd;

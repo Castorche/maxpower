@@ -1,0 +1,27 @@
+package maxpower.lmem.cpu_access;
+
+import com.maxeler.maxcompiler.v2.build.EngineParameters;
+import com.maxeler.maxcompiler.v2.managers.DFEModel;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.DebugLevel;
+import com.maxeler.networking.v1.managers.NetworkManager;
+
+public class LMemCpuAccessTest extends NetworkManager {
+
+	public LMemCpuAccessTest(EngineParameters params) {
+		super(params);
+
+		debug.setDebugLevel(new DebugLevel().setHasStreamStatus(true));
+
+		LMemCpuAccess.create(this);
+
+	}
+
+	public static void main(String[] args) {
+		EngineParameters p = new EngineParameters("LMemCpuAccessTest", DFEModel.ISCA, EngineParameters.Target.DFE_SIM);
+
+		LMemCpuAccessTest test = new LMemCpuAccessTest(p);
+
+		test.build();
+	}
+
+}

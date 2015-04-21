@@ -26,7 +26,7 @@ def compile():
 
 def link():
     objects = [s.replace('.c', '.o') for s in sources]
-    run('ar', '-cq', target, objects)
+    run('ar', '-cr', target, objects)
 
 def clean():
     autoclean()

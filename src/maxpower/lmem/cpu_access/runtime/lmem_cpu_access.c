@@ -22,8 +22,12 @@
 
 #define LMEM_CMD_STREAM_NAME "CpuAccessLMemCommands"
 #define LMEM_CONTROL_GROUP_NAME "CpuAccessControlGroup"
-#define LMEM_WRITE_STREAM_NAME "CpuAccessToLMem"
-#define LMEM_READ_STREAM_NAME "CpuAccessFromLMem"
+
+#define LMEM_WRITE_CPU_STREAM_NAME "CpuToLMem"
+#define LMEM_READ_CPU_STREAM_NAME "LMemToCpu"
+
+#define LMEM_WRITE_STREAM_NAME "LMemCpuWrite"
+#define LMEM_READ_STREAM_NAME "LMemCpuRead"
 
 #define TIMEOUT_SECONDS 5
 
@@ -46,10 +50,17 @@ enum access_mode_e {
 	LMemWrite
 };
 
-typedef struct __attribute__((packed)) mem_cmd_stream_slot_s {
+typedef struct ATTRIB_PACKED mem_cmd_stream_slot_s {
 	lmem_cmd_t cmd1;
 	lmem_cmd_t cmd2;
 } mem_cmd_stream_slot_t;
+
+
+size_t lmem_get_burst_size_bytes(lmem_cpu_access_t *handle)
+{
+	return handle->burst_size_bytes;
+}
+
 
 lmem_cpu_access_t *init_lmem_cpu_access(max_file_t *maxfile, max_engine_t *engine)
 {
@@ -66,9 +77,9 @@ lmem_cpu_access_t *init_lmem_cpu_access(max_file_t *maxfile, max_engine_t *engin
 	handle->maxfile = maxfile;
 	handle->burst_size_bytes = max_get_constant_uint64t(maxfile, "MemCtrlPro_DataBurstSizeInBytes");
 
-	handle->cmd_buffer_size = 512 * sizeof(lmem_cmd_t);
+	handle->cmd_buffer_size = 512 * sizeof(mem_cmd_stream_slot_t);
 	posix_memalign(&handle->cmd_buffer, 4096, handle->cmd_buffer_size);
-	handle->cmd_stream = max_llstream_setup(handle->engine, LMEM_CMD_STREAM_NAME, 512, sizeof(lmem_cmd_t), handle->cmd_buffer);
+	handle->cmd_stream = max_llstream_setup(handle->engine, LMEM_CMD_STREAM_NAME, 512, sizeof(mem_cmd_stream_slot_t), handle->cmd_buffer);
 
 	handle->to_lmem_stream_id = 1 << max_lmem_get_id_within_group(maxfile, LMEM_WRITE_STREAM_NAME);
 	handle->from_lmem_stream_id = 1 << max_lmem_get_id_within_group(maxfile, LMEM_READ_STREAM_NAME);
@@ -111,12 +122,10 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 		uint32_t base_address_bursts,
 		void *data, size_t data_size_bursts)
 {
-	void *cmdWriteSlot = NULL;
-
 	max_actions_t *actions = max_actions_init(handle->maxfile, NULL);
 
-	if (access_mode == LMemRead) max_queue_output(actions, LMEM_READ_STREAM_NAME,  data, data_size_bursts * handle->burst_size_bytes);
-	else                         max_queue_input (actions, LMEM_WRITE_STREAM_NAME, data, data_size_bursts * handle->burst_size_bytes);
+	if (access_mode == LMemRead) max_queue_output(actions, LMEM_READ_CPU_STREAM_NAME,  data, data_size_bursts * handle->burst_size_bytes);
+	else                         max_queue_input (actions, LMEM_WRITE_CPU_STREAM_NAME, data, data_size_bursts * handle->burst_size_bytes);
 
 	max_run_t *runContext = max_run_nonblock(handle->engine, actions);
 
@@ -129,9 +138,8 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 
 
 	while (size_remaining_bursts > 0) {
-		cmdWriteSlot = acquire_memory_command_slot(handle, TIMEOUT_SECONDS);
+		cmdSlot = acquire_memory_command_slot(handle, TIMEOUT_SECONDS);
 
-		cmdSlot = cmdWriteSlot;
 		bool isPadding = size_remaining_bursts == 0;
 
 		size_t now = MIN(size_remaining_bursts, 127);

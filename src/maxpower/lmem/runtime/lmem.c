@@ -15,7 +15,7 @@
 #define MAX_STREAM_ID (1<<15)
 
 static bool is_power_of_2(uint32_t v) {
-	return ((v & (v-1)) == v);
+	return ((v & (v-1)) == 0);
 }
 
 static bool is_one_hot_encoded(uint32_t v) {

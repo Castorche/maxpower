@@ -7,7 +7,7 @@ import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
 public class LMemCpuAccess {
 	private static int instanceCount = 0;
 
-	public static void create(CustomManager owner, String name) {
+	public static void create(CustomManager owner) {
 		instanceCount++;
 
 		if (instanceCount > 1)
@@ -17,10 +17,8 @@ public class LMemCpuAccess {
 		DFELink cmds = owner.addStreamFromCPU("CpuAccessLMemCommands");
 		MemoryControlGroup control = owner.addMemoryControlGroup("CpuAccessControlGroup", cmds);
 
-		String toLMemName = "CpuAccessToLMem";
-		String fromLMemName = "CpuAccessFromLMem";
 
-		owner.addStreamToOnCardMemory(toLMemName, control) <== owner.addStreamFromCPU(toLMemName);
-		owner.addStreamToCPU(fromLMemName) <== owner.addStreamFromOnCardMemory(fromLMemName, control);
+		owner.addStreamToOnCardMemory("LMemCpuWrite", control) <== owner.addStreamFromCPU("CpuToLMem");
+		owner.addStreamToCPU("LMemToCpu") <== owner.addStreamFromOnCardMemory("LMemCpuRead", control);
 	}
 }
