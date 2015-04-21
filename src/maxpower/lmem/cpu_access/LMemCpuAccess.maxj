@@ -1,0 +1,26 @@
+package maxpower.lmem.cpu_access;
+
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
+
+public class LMemCpuAccess {
+	private static int instanceCount = 0;
+
+	public static void create(CustomManager owner, String name) {
+		instanceCount++;
+
+		if (instanceCount > 1)
+			throw new RuntimeException(
+					String.format("LMemCpuAccess: Should only be instantiated once.\n"));
+
+		DFELink cmds = owner.addStreamFromCPU("CpuAccessLMemCommands");
+		MemoryControlGroup control = owner.addMemoryControlGroup("CpuAccessControlGroup", cmds);
+
+		String toLMemName = "CpuAccessToLMem";
+		String fromLMemName = "CpuAccessFromLMem";
+
+		owner.addStreamToOnCardMemory(toLMemName, control) <== owner.addStreamFromCPU(toLMemName);
+		owner.addStreamToCPU(fromLMemName) <== owner.addStreamFromOnCardMemory(fromLMemName, control);
+	}
+}
