@@ -173,7 +173,7 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 
 void lmem_write(lmem_cpu_access_t *handle, uint32_t address_bursts, const void *data, size_t data_size_bursts)
 {
-	do_memory_access(handle, LMemWrite, address_bursts, data, data_size_bursts);
+	do_memory_access(handle, LMemWrite, address_bursts, (void *)data, data_size_bursts);
 }
 
 void lmem_read(lmem_cpu_access_t *handle, uint32_t address_bursts, void *data, size_t data_size_bursts)
