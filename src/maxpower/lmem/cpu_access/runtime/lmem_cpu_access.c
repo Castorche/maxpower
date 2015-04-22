@@ -19,6 +19,9 @@
 
 #define MAX_NAME_LENGTH 64
 #define MAX_STREAM_NAME_LENGTH (MAX_NAME_LENGTH + 64)
+#define PAGE_SIZE 4096
+#define MAX_NUM_SLOTS 512
+#define MAX_BURSTS_PER_CMD 127
 
 #define LMEM_CMD_STREAM_NAME "CpuAccessLMemCommands"
 #define LMEM_CONTROL_GROUP_NAME "CpuAccessControlGroup"
@@ -62,7 +65,7 @@ size_t lmem_get_burst_size_bytes(lmem_cpu_access_t *handle)
 }
 
 
-lmem_cpu_access_t *init_lmem_cpu_access(max_file_t *maxfile, max_engine_t *engine)
+lmem_cpu_access_t *lmem_init_cpu_access(max_file_t *maxfile, max_engine_t *engine)
 {
 	assert(maxfile != NULL);
 	assert(engine != NULL);
@@ -77,9 +80,10 @@ lmem_cpu_access_t *init_lmem_cpu_access(max_file_t *maxfile, max_engine_t *engin
 	handle->maxfile = maxfile;
 	handle->burst_size_bytes = max_get_constant_uint64t(maxfile, "MemCtrlPro_DataBurstSizeInBytes");
 
-	handle->cmd_buffer_size = 512 * sizeof(mem_cmd_stream_slot_t);
-	posix_memalign(&handle->cmd_buffer, 4096, handle->cmd_buffer_size);
-	handle->cmd_stream = max_llstream_setup(handle->engine, LMEM_CMD_STREAM_NAME, 512, sizeof(mem_cmd_stream_slot_t), handle->cmd_buffer);
+	handle->cmd_buffer_size = MAX_NUM_SLOTS * sizeof(mem_cmd_stream_slot_t);
+	posix_memalign(&handle->cmd_buffer, PAGE_SIZE, handle->cmd_buffer_size);
+	handle->cmd_stream = max_llstream_setup(handle->engine, LMEM_CMD_STREAM_NAME,
+			MAX_NUM_SLOTS, sizeof(mem_cmd_stream_slot_t), handle->cmd_buffer);
 
 	handle->to_lmem_stream_id = 1 << max_lmem_get_id_within_group(maxfile, LMEM_WRITE_STREAM_NAME);
 	handle->from_lmem_stream_id = 1 << max_lmem_get_id_within_group(maxfile, LMEM_READ_STREAM_NAME);
@@ -142,7 +146,7 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 
 		bool isPadding = size_remaining_bursts == 0;
 
-		size_t now = MIN(size_remaining_bursts, 127);
+		size_t now = MIN(size_remaining_bursts, MAX_BURSTS_PER_CMD);
 		size_remaining_bursts -= now;
 		// First command in the slot
 		cmdSlot->cmd1 = lmem_cmd_data(stream_id, base_address_bursts + position, now, false, false);
@@ -151,7 +155,7 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 
 		isPadding = size_remaining_bursts == 0;
 		// Second command in the slot
-		now = MIN(size_remaining_bursts, 127);
+		now = MIN(size_remaining_bursts, MAX_BURSTS_PER_CMD);
 		size_remaining_bursts -= now;
 		cmdSlot->cmd2 = isPadding ?
 				lmem_cmd_padding() :
@@ -167,7 +171,7 @@ static void do_memory_access(lmem_cpu_access_t *handle,
 	max_actions_free(actions);
 }
 
-void lmem_write(lmem_cpu_access_t *handle, uint32_t address_bursts, void *data, size_t data_size_bursts)
+void lmem_write(lmem_cpu_access_t *handle, uint32_t address_bursts, const void *data, size_t data_size_bursts)
 {
 	do_memory_access(handle, LMemWrite, address_bursts, data, data_size_bursts);
 }

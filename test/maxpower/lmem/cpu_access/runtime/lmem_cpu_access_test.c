@@ -53,7 +53,7 @@ int main(int argc, char *argv[]) {
 	max_run(engine, actions);
 	max_actions_free(actions);
 
-	lmem_cpu_access_t * handle = init_lmem_cpu_access(maxfile, engine);
+	lmem_cpu_access_t * handle = lmem_init_cpu_access(maxfile, engine);
 	burst_size_bytes = lmem_get_burst_size_bytes(handle);
 
 	size_t max_size_bytes = burst_size_bytes * MAX_BURSTS;
