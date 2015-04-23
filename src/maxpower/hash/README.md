@@ -71,3 +71,4 @@ maxhash_put(table, key, SIZE_OF_KEY, &value, sizeof(value));
 // When you want the HW to be updated
 maxhash_commit(table)
 ```
+
