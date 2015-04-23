@@ -42,15 +42,9 @@ struct lmem_cpu_access_s {
 
 	uint32_t burst_size_bytes;
 
-
 	max_llstream_t *cmd_stream;
 	uint16_t to_lmem_stream_id;
 	uint16_t from_lmem_stream_id;
-};
-
-enum access_mode_e {
-	LMemRead,
-	LMemWrite
 };
 
 typedef struct ATTRIB_PACKED {
@@ -173,6 +167,3 @@ void lmem_read(lmem_cpu_access_t *handle, uint32_t address_bursts, void *data, s
 	max_wait(runContext);
 	max_actions_free(actions);
 }
-
-
-
