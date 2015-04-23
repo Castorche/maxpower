@@ -53,7 +53,7 @@ enum access_mode_e {
 	LMemWrite
 };
 
-typedef struct ATTRIB_PACKED mem_cmd_stream_slot_s {
+typedef struct ATTRIB_PACKED {
 	lmem_cmd_t cmd1;
 	lmem_cmd_t cmd2;
 } mem_cmd_stream_slot_t;
@@ -63,7 +63,6 @@ size_t lmem_get_burst_size_bytes(lmem_cpu_access_t *handle)
 {
 	return handle->burst_size_bytes;
 }
-
 
 lmem_cpu_access_t *lmem_init_cpu_access(max_file_t *maxfile, max_engine_t *engine)
 {
@@ -121,64 +120,58 @@ static void commit_memory_command_slot(lmem_cpu_access_t *handle)
 
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-static void do_memory_access(lmem_cpu_access_t *handle,
-		enum access_mode_e access_mode,
+static void send_mem_commands(
+		lmem_cpu_access_t *handle,
+		uint16_t stream_id,
 		uint32_t base_address_bursts,
-		void *data, size_t data_size_bursts)
+		size_t data_size_bursts)
 {
-	max_actions_t *actions = max_actions_init(handle->maxfile, NULL);
+	size_t address   = base_address_bursts;
+	size_t remaining = data_size_bursts;
 
-	if (access_mode == LMemRead) max_queue_output(actions, LMEM_READ_CPU_STREAM_NAME,  data, data_size_bursts * handle->burst_size_bytes);
-	else                         max_queue_input (actions, LMEM_WRITE_CPU_STREAM_NAME, data, data_size_bursts * handle->burst_size_bytes);
+	while (remaining > 0) {
+		mem_cmd_stream_slot_t *cmdSlot = acquire_memory_command_slot(handle, TIMEOUT_SECONDS);
 
-	max_run_t *runContext = max_run_nonblock(handle->engine, actions);
-
-	uint16_t stream_id = access_mode == LMemRead ? handle->from_lmem_stream_id : handle->to_lmem_stream_id;
-	size_t position = 0;
-	size_t size_remaining_bursts = data_size_bursts;
-	mem_cmd_stream_slot_t *cmdSlot;
-
-
-
-
-	while (size_remaining_bursts > 0) {
-		cmdSlot = acquire_memory_command_slot(handle, TIMEOUT_SECONDS);
-
-		bool isPadding = size_remaining_bursts == 0;
-
-		size_t now = MIN(size_remaining_bursts, MAX_BURSTS_PER_CMD);
-		size_remaining_bursts -= now;
+		size_t now = MIN(remaining, MAX_BURSTS_PER_CMD);
 		// First command in the slot
-		cmdSlot->cmd1 = lmem_cmd_data(stream_id, base_address_bursts + position, now, false, false);
-		position += now;
+		cmdSlot->cmd1 = lmem_cmd_data(stream_id, address, now, false, false);
 
+		address   += now;
+		remaining -= now;
 
-		isPadding = size_remaining_bursts == 0;
+		now = MIN(remaining, MAX_BURSTS_PER_CMD);
 		// Second command in the slot
-		now = MIN(size_remaining_bursts, MAX_BURSTS_PER_CMD);
-		size_remaining_bursts -= now;
-		cmdSlot->cmd2 = isPadding ?
-				lmem_cmd_padding() :
-				lmem_cmd_data(stream_id, base_address_bursts + position, now, false, false);
-		position += now;
+		cmdSlot->cmd2 = (remaining == 0) ? lmem_cmd_padding() : lmem_cmd_data(stream_id, address, now, false, false);
+
+		address   += now;
+		remaining -= now;
 
 		commit_memory_command_slot(handle);
 	}
-
-
-	max_wait(runContext);
-
-	max_actions_free(actions);
 }
 
 void lmem_write(lmem_cpu_access_t *handle, uint32_t address_bursts, const void *data, size_t data_size_bursts)
 {
-	do_memory_access(handle, LMemWrite, address_bursts, (void *)data, data_size_bursts);
+	max_actions_t *actions = max_actions_init(handle->maxfile, NULL);
+	max_queue_input(actions, LMEM_WRITE_CPU_STREAM_NAME, data, data_size_bursts * handle->burst_size_bytes);
+	max_run_t *runContext = max_run_nonblock(handle->engine, actions);
+
+	send_mem_commands(handle, handle->to_lmem_stream_id, address_bursts, data_size_bursts);
+
+	max_wait(runContext);
+	max_actions_free(actions);
 }
 
 void lmem_read(lmem_cpu_access_t *handle, uint32_t address_bursts, void *data, size_t data_size_bursts)
 {
-	do_memory_access(handle, LMemRead, address_bursts, data, data_size_bursts);
+	max_actions_t *actions = max_actions_init(handle->maxfile, NULL);
+	max_queue_output(actions, LMEM_READ_CPU_STREAM_NAME, data, data_size_bursts * handle->burst_size_bytes);
+	max_run_t *runContext = max_run_nonblock(handle->engine, actions);
+
+	send_mem_commands(handle, handle->from_lmem_stream_id, address_bursts, data_size_bursts);
+
+	max_wait(runContext);
+	max_actions_free(actions);
 }
 
 
