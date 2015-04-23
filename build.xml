@@ -4,9 +4,11 @@
 	<property environment="env"/>
 	<property name="bin.dir" location="bin"/>
 	<property name="report.dir" location="report"/>
+	<property name="maxjdoc.dir" location="maxjdoc"/>
 	<property name="jacoco.exec.file" location="${report.dir}/jacoco.exec"/>
 
 	<taskdef name="maxjcompiler" classname="org.eclipse.jdt.core.ant.taskdef.MaxjTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar" onerror="ignore"/>
+	<taskdef name="maxjdoc" classname="org.eclipse.jdt.core.ant.taskdef.MaxjDocTask" classpath="${env.MAXCOMPILERDIR}/lib/MaxIDE/ecj.jar"/>
 
 	<taskdef uri="antlib:org.jacoco.ant" resource="org/jacoco/ant/antlib.xml">
 		<classpath location="${env.JACOCODIR}/lib/jacocoant.jar"/>
@@ -23,7 +25,7 @@
 	<path id="main.classpath">
 		<pathelement location="${maxeda.classpath}"/>
 	</path>
-	
+
 	<path id="test.classpath">
 		<path refid="main.classpath"/>
 		<pathelement location="${env.MAXCOMPILERDIR}/lib/MaxIDE/plugins/org.junit4/junit.jar"/>
@@ -32,7 +34,14 @@
 		<pathelement location="${bin.dir}"/>
 	</path>
 
-	<target name="all" depends="compile, compile-test, test"/>
+	<path id="main.src">
+		<fileset dir="src" defaultexcludes="yes">
+			<include name="**/*.java"/>
+			<include name="**/*.maxj"/>
+		</fileset>
+	</path>
+
+	<target name="all" depends="compile, compile-test, test, maxjdoc"/>
 
 	<target name="compile" depends="clean">
 		<echo>
@@ -103,8 +112,24 @@ Using maxeda classpath '${maxeda.classpath}'
 		</jacoco:report>
 	</target>
 
+	<target name="maxjdoc">
+		<mkdir dir="${maxjdoc.dir}"/>
+		<maxjdoc
+			package="maxpower.*"
+			sourcepathref="main.src"
+			destdir="${maxjdoc.dir}"
+			classpathref="main.classpath"
+			author="false"
+			doctitle="MaxPower MaxJ API"
+			source="1.6"
+			use="true"
+			version="true"
+			failonerror="true"/>
+	</target>
+
 	<target name="clean">
 		<delete dir="${bin.dir}"/>
 		<delete dir="${report.dir}"/>
+		<delete dir="${maxjdoc.dir}"/>
 	</target>
 </project>

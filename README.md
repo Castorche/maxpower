@@ -19,6 +19,11 @@ Using MaxPower
    - Select 'Projects', then click 'Add'.
    - Select 'maxpower', then click 'OK' twice.
 
+Documentation
+-------------
+
+Documentation for the MaxJ API can be found [here](http://maxeler.github.io/maxpower/maxjdoc/).
+
 Contributing
 ------------
 

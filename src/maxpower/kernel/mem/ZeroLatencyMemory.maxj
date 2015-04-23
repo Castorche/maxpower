@@ -62,12 +62,12 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 	}
 
 	/**
-	 * Create {@ZeroLatencyMemory} in fast on-chip memory.
+	 * Create {@code ZeroLatencyMemory} in fast on-chip memory.
 	 *
 	 * @param owner  containing {@code KernelLib}
 	 * @param type   stored type
 	 * @param depth  maximum number of values which can be stored
-	 * @return
+	 * @return zero latency memory object which can read from or written to
 	 */
 	public static <T extends KernelObject<T>> ZeroLatencyMemory<T> alloc(KernelLib owner, KernelType<T> type, int depth) {
 		return new ZeroLatencyMemory<T>(owner, type, depth);

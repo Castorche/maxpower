@@ -148,7 +148,7 @@ public class MaxHashParameters<T extends KernelObject<T>> {
 	 * concurrently with new entries being loaded.  This is enabled by
 	 * default.
 	 *
-	 * @param validateResults Whether or not to enable result validation
+	 * @param doubleBufferingEnabled Whether or not to enable double buffering
 	 */
 	public void setDoubleBufferingEnabled(boolean doubleBufferingEnabled) {
 		this.doubleBufferingEnabled = doubleBufferingEnabled;
