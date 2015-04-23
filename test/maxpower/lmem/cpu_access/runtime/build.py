@@ -1,9 +1,15 @@
 #!/usr/bin/python
 
 import os
+import sys
 import getpass
 import subprocess
-from fabricate import *
+
+try:
+	from fabricate import *
+except ImportError, e:
+	print "Couldn't find the fabricate module. Make sure you have sourced config.sh"
+	sys.exit(1)
 
 
 def get_maxpower_dir():
