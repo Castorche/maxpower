@@ -1,0 +1,141 @@
+package maxpower.kernel;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.LMemCommandStream;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+/**
+ * A large fixed offset using LMem to reduce FMem usage.
+ *
+ * The position in LMem can altered via the burst offset scalar.
+ *
+ * Often, it is not a good idea to issue memory commands from the kernel
+ * reading / writing the data, as without care, stalls are common. Here, however,
+ * we can avoid read-before-write by issuing the read commands just-in-time.
+ *
+ * Note that we perform the aspect change for data within this kernel. This means that
+ * we don't have to worry about padding for the final memory burst. It also saves a few
+ * FMems in the manager.
+ *
+ * @author Chris Jones
+ */
+public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends KernelLib {
+	public static final String LMEM_CMD_NAME  = "cmds";
+	public static final String FROM_LMEM_NAME = "fromLmem";
+	public static final String TO_LMEM_NAME   = "toLMem";
+
+	private static final int MAX_BURSTS_PER_COMMAND = 64; // must be power of two
+
+	private final String name;
+	private final T val;
+	private final int offset;
+
+	private T offsetVal;
+
+	private LargeStreamOffset(String name, T val, int offset) {
+		super(val.getKernel());
+
+		// TODO check offset is greater than particular size?
+		if (offset >= 0) {
+			throw new MaxCompilerAPIError("Not compatible with negative offsets");
+		}
+
+		this.name   = name;
+		this.val    = val;
+		this.offset = offset;
+
+		build();
+	}
+
+	private void build() {
+		CounterChain cc = control.count.makeCounterChain();
+		DFEVar wrap = cc.getCounterWrap(cc.addCounter(-offset, 1));
+
+		Counter posInBurst =
+			control.count.makeCounter(
+					control.count.makeParams(MathUtils.bitsToAddress(getValuesPerBurst()))
+					             .withMax(getValuesPerBurst())
+					             .withReset(wrap));
+
+		Counter burst =
+			control.count.makeCounter(
+					control.count.makeParams(MathUtils.bitsToAddress(getNumberOfBursts()))
+					             .withMax(getNumberOfBursts())
+					             .withEnable(posInBurst.getWrap())
+					             .withReset(wrap));
+
+		sendLMemCommands(burst.getCount(), posInBurst.getCount());
+		offsetVal = readInput(posInBurst.getCount());
+		writeOutput(posInBurst.getCount());
+
+		// We issue the read commands just-in-time to eliminate the chance of read-before-write
+		// errors for realistic offset sizes. However, we want the data from the memory to arrive
+		// without stalling the kernel. The latency of a memory read is typically ~50 cycles, so
+		// we send the command 100 cycles before we need the data to give us a bit of a buffer.
+		io.forceExactIOSeparation(name+"_"+FROM_LMEM_NAME, name+"_"+LMEM_CMD_NAME, -100);
+	}
+
+	private T readInput(DFEVar posInBurst) {
+		DFEVector<T> fromLMem = io.input(name+"_"+FROM_LMEM_NAME, getLMemType(), posInBurst === 0);
+		return control.mux(posInBurst, fromLMem.getElementsAsList());
+	}
+
+	private void writeOutput(DFEVar posInBurst) {
+		DFEVector<T> toLMem = io.output(name+"_"+TO_LMEM_NAME, getLMemType(), posInBurst === 0);
+		for (int i = 0; i < getValuesPerBurst(); ++i) {
+			toLMem[i] <== stream.offset(val, +i);
+		}
+	}
+
+	private void sendLMemCommands(DFEVar burst, DFEVar posInBurst) {
+		DFEVar burstOffset = io.scalarInput(name+"_burstOffset", dfeUInt(32));
+
+		int lastCmdSize  = getNumberOfBursts() % MAX_BURSTS_PER_COMMAND;
+		int lastCmdBurst = getNumberOfBursts() - lastCmdSize;
+
+		DFEVar addr   = burst.cast(dfeUInt(32)) + burstOffset;
+		DFEVar size   = (burst === lastCmdBurst) ? constant.var(dfeUInt(8), lastCmdSize) : MAX_BURSTS_PER_COMMAND;
+		DFEVar inc    = constant.var(dfeUInt(8), 1);
+		DFEVar stream = (posInBurst === 0) ? constant.var(dfeUInt(4), 1) : 0;
+		DFEVar tag    = constant.var(false);
+
+		DFEVar cmdEnable = (KernelMath.modulo(burst, MAX_BURSTS_PER_COMMAND) === 0) & (posInBurst < 2);
+
+		io.output(name+"_"+LMEM_CMD_NAME, LMemCommandStream.getLMemCommandDFEStructType(), cmdEnable)
+			<== LMemCommandStream.cmdReadOrWrite(addr, size, inc, stream, tag);
+	}
+
+	private int getNumberOfBursts() {
+		return MathUtils.ceilDivide(-offset, getValuesPerBurst());
+	}
+
+	private int getValuesPerBurst() {
+		int burstSize = 8 * getManager().getManagerConfiguration().dram.getAdjustedBurstSizeInBytes();
+		return MathUtils.exactDivide(burstSize, val.getType().getTotalBits());
+	}
+
+	private DFEVectorType<T> getLMemType() {
+		return new DFEVectorType<T>(val.getType(), getValuesPerBurst());
+	}
+
+	public static <T extends KernelObjectVectorizable<T, ?>> T makeOffset(String name, T val, int offset) {
+		return new LargeStreamOffset<T>(name, val, offset).offsetVal;
+	}
+
+	public static void connect(CustomManager manager, KernelBlock blk, String name) {
+		MemoryControlGroup memCtrl = manager.addMemoryControlGroup(name+"_MemCtrl", blk.getOutput(name+"_"+LMEM_CMD_NAME));
+		blk.getInput(name+"_"+FROM_LMEM_NAME) <== manager.addStreamFromOnCardMemory(name+"_FromLMem", memCtrl);
+		manager.addStreamToOnCardMemory(name+"_ToLMem", memCtrl) <== blk.getOutput(name+"_"+TO_LMEM_NAME);
+	}
+}
