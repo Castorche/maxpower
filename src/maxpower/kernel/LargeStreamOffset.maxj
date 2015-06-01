@@ -5,7 +5,6 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.KernelMath;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.LMemCommandStream;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
-import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObjectVectorizable;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
@@ -18,19 +17,21 @@ import com.maxeler.maxcompiler.v2.utils.MathUtils;
 /**
  * A large fixed offset using LMem to reduce FMem usage.
  *
- * The position in LMem can altered via the burst offset scalar.
- *
- * Often, it is not a good idea to issue memory commands from the kernel
- * reading / writing the data, as without care, stalls are common. Here, however,
- * we can avoid read-before-write by issuing the read commands just-in-time.
- *
- * Note that we perform the aspect change for data within this kernel. This means that
- * we don't have to worry about padding for the final memory burst. It also saves a few
- * FMems in the manager.
+ * N.B. The position in LMem can altered via the burst offset scalar.
  *
  * @author Chris Jones
  */
 public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends KernelLib {
+	/*
+	 * Often, it is not a good idea to issue memory commands from the kernel
+	 * reading / writing the data, as without care, stalls are common. Here, however,
+	 * we can avoid read-before-write by issuing the read commands just-in-time.
+	 *
+	 * Note that we perform the aspect change for data within this kernel. This means that
+	 * we don't have to worry about padding for the final memory burst. It also saves a few
+	 * FMems in the manager.
+	 */
+
 	public static final String LMEM_CMD_NAME  = "cmds";
 	public static final String FROM_LMEM_NAME = "fromLmem";
 	public static final String TO_LMEM_NAME   = "toLMem";
@@ -59,21 +60,21 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 	}
 
 	private void build() {
-		CounterChain cc = control.count.makeCounterChain();
-		DFEVar wrap = cc.getCounterWrap(cc.addCounter(-offset, 1));
+		// if only simpleCounter was this simple!
+		DFEVar pos = control.count.makeCounterChain().addCounter(-offset, 1);
 
 		Counter posInBurst =
 			control.count.makeCounter(
 					control.count.makeParams(MathUtils.bitsToAddress(getValuesPerBurst()))
 					             .withMax(getValuesPerBurst())
-					             .withReset(wrap));
+					             .withReset(pos === 0));
 
 		Counter burst =
 			control.count.makeCounter(
 					control.count.makeParams(MathUtils.bitsToAddress(getNumberOfBursts()))
 					             .withMax(getNumberOfBursts())
 					             .withEnable(posInBurst.getWrap())
-					             .withReset(wrap));
+					             .withReset(pos === 0));
 
 		sendLMemCommands(burst.getCount(), posInBurst.getCount());
 		offsetVal = readInput(posInBurst.getCount());
@@ -107,9 +108,10 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 		DFEVar addr   = burst.cast(dfeUInt(32)) + burstOffset;
 		DFEVar size   = (burst === lastCmdBurst) ? constant.var(dfeUInt(8), lastCmdSize) : MAX_BURSTS_PER_COMMAND;
 		DFEVar inc    = constant.var(dfeUInt(8), 1);
-		DFEVar stream = (posInBurst === 0) ? constant.var(dfeUInt(4), 1) : 0;
+		DFEVar stream = posInBurst.cast(dfeUInt(4));
 		DFEVar tag    = constant.var(false);
 
+		// send two commands, one on each of the read and write streams
 		DFEVar cmdEnable = (KernelMath.modulo(burst, MAX_BURSTS_PER_COMMAND) === 0) & (posInBurst < 2);
 
 		io.output(name+"_"+LMEM_CMD_NAME, LMemCommandStream.getLMemCommandDFEStructType(), cmdEnable)
