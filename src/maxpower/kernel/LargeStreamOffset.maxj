@@ -129,7 +129,7 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 		return new DFEVectorType<T>(val.getType(), getValuesPerBurst());
 	}
 
-	public static <T extends KernelObjectVectorizable<T, ?>> T makeOffset(String name, T val, int offset) {
+	public static <T extends KernelObjectVectorizable<T, ?>> T offset(String name, T val, int offset) {
 		return new LargeStreamOffset<T>(name, val, offset).offsetVal;
 	}
 
