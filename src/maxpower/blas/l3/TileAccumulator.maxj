@@ -23,7 +23,7 @@ import com.maxeler.maxcompiler.v2.managers.custom.blocks.KernelBlock;
  */
 public class TileAccumulator extends KernelLib {
 	private static final String LARGE_STREAM_OFFSET_NAME = "LargeStreamOffset";
-	private static final int LARGE_STREAM_OFFSET_THRESHOLD = 1000;
+	private static final int LARGE_STREAM_OFFSET_THRESHOLD = 25000; // very rough guess... LSO uses ~100 FMems
 
 	private final int tileSize2D;
 	private final DFEVar sumTiles;
