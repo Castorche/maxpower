@@ -36,7 +36,7 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 	public static final String FROM_LMEM_NAME = "fromLmem";
 	public static final String TO_LMEM_NAME   = "toLMem";
 
-	private static final int MAX_BURSTS_PER_COMMAND = 64; // must be power of two
+	private static final int BURSTS_PER_COMMAND = 64; // must be power of two
 
 	private final String name;
 	private final T val;
@@ -47,14 +47,17 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 	private LargeStreamOffset(String name, T val, int offset) {
 		super(val.getKernel());
 
-		// TODO check offset is greater than particular size?
-		if (offset >= 0) {
-			throw new MaxCompilerAPIError("Not compatible with negative offsets");
-		}
-
 		this.name   = name;
 		this.val    = val;
 		this.offset = offset;
+
+		if (offset >= 0) {
+			throw new MaxCompilerAPIError("Only compatible with negative offsets");
+		}
+
+		if (getNumberOfBursts() < 2*BURSTS_PER_COMMAND) {
+			throw new MaxCompilerAPIError("Offset is too small for LargeStreamOffset");
+		}
 
 		build();
 	}
@@ -102,17 +105,17 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 	private void sendLMemCommands(DFEVar burst, DFEVar posInBurst) {
 		DFEVar burstOffset = io.scalarInput(name+"_burstOffset", dfeUInt(32));
 
-		int lastCmdSize  = getNumberOfBursts() % MAX_BURSTS_PER_COMMAND;
+		int lastCmdSize  = getNumberOfBursts() % BURSTS_PER_COMMAND;
 		int lastCmdBurst = getNumberOfBursts() - lastCmdSize;
 
 		DFEVar addr   = burst.cast(dfeUInt(32)) + burstOffset;
-		DFEVar size   = (burst === lastCmdBurst) ? constant.var(dfeUInt(8), lastCmdSize) : MAX_BURSTS_PER_COMMAND;
+		DFEVar size   = (burst === lastCmdBurst) ? constant.var(dfeUInt(8), lastCmdSize) : BURSTS_PER_COMMAND;
 		DFEVar inc    = constant.var(dfeUInt(8), 1);
 		DFEVar stream = posInBurst.cast(dfeUInt(4));
 		DFEVar tag    = constant.var(false);
 
 		// send two commands, one on each of the read and write streams
-		DFEVar cmdEnable = (KernelMath.modulo(burst, MAX_BURSTS_PER_COMMAND) === 0) & (posInBurst < 2);
+		DFEVar cmdEnable = (KernelMath.modulo(burst, BURSTS_PER_COMMAND) === 0) & (posInBurst < 2);
 
 		io.output(name+"_"+LMEM_CMD_NAME, LMemCommandStream.getLMemCommandDFEStructType(), cmdEnable)
 			<== LMemCommandStream.cmdReadOrWrite(addr, size, inc, stream, tag);
