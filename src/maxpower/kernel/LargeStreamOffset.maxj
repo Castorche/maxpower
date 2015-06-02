@@ -75,7 +75,6 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 		Counter burst =
 			control.count.makeCounter(
 					control.count.makeParams(MathUtils.bitsToAddress(getNumberOfBursts()))
-					             .withMax(getNumberOfBursts())
 					             .withEnable(posInBurst.getWrap())
 					             .withReset(pos === 0));
 
