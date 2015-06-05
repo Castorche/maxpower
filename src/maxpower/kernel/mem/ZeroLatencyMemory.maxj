@@ -11,6 +11,7 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.KernelFinalizer;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Mem.RamWriteMode;
 import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelObject;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.KernelType;
@@ -120,7 +121,10 @@ public class ZeroLatencyMemory<T extends KernelObject<T>> extends KernelLib impl
 		DFEVar enable_  = stream.offset(enable , -LOOP_LATENCY) & (cycle >= LOOP_LATENCY);
 		T      data_    = stream.offset(data   , -LOOP_LATENCY);
 
-		ram.write(address_, data_, enable_);
+		// Slight hack. This is equivalent to ram.write(address_, data_, enable_),
+		// as we ignore the return value. However, Memory defaults to READ_FIRST,
+		// which won't work on Altera if we also call mapToCPU(), so change that here.
+		ram.port(address_, data_, enable_, RamWriteMode.WRITE_FIRST);
 
 		writeAddress <== address;
 		writeEnable  <== enable;
