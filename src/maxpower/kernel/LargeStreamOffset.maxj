@@ -33,7 +33,7 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 	 */
 
 	public static final String LMEM_CMD_NAME  = "cmds";
-	public static final String FROM_LMEM_NAME = "fromLmem";
+	public static final String FROM_LMEM_NAME = "fromLMem";
 	public static final String TO_LMEM_NAME   = "toLMem";
 
 	private static final int BURSTS_PER_COMMAND = 64; // must be power of two
@@ -51,58 +51,63 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 		this.val    = val;
 		this.offset = offset;
 
-		if (offset >= 0) {
+		if (offset >= 0)
 			throw new MaxCompilerAPIError("Only compatible with negative offsets");
-		}
 
-		if (getNumberOfBursts() < 2*BURSTS_PER_COMMAND) {
-			throw new MaxCompilerAPIError("Offset is too small for LargeStreamOffset");
-		}
+		if (-offset < 1024 * getValuesPerBurst())
+			throw new MaxCompilerAPIError("Offset is too small for LargeStreamOffset. Use normal offset instead");
+
+		if (val.getType().getTotalBits() > getBurstSizeInBits())
+			throw new MaxCompilerAPIError("Value type must be smaller than burst size");
 
 		build();
 	}
 
 	private void build() {
-		// if only simpleCounter was this simple!
-		DFEVar pos = control.count.makeCounterChain().addCounter(-offset, 1);
-
-		Counter posInBurst =
-			control.count.makeCounter(
-					control.count.makeParams(MathUtils.bitsToAddress(getValuesPerBurst()))
-					             .withMax(getValuesPerBurst())
-					             .withReset(pos === 0));
-
-		Counter burst =
-			control.count.makeCounter(
-					control.count.makeParams(MathUtils.bitsToAddress(getNumberOfBursts()))
-					             .withEnable(posInBurst.getWrap())
-					             .withReset(pos === 0));
-
-		sendLMemCommands(burst.getCount(), posInBurst.getCount());
-		offsetVal = readInput(posInBurst.getCount());
-		writeOutput(posInBurst.getCount());
+		sendLMemCommands();
+		offsetVal = readInput();
+		writeOutput();
 
 		// We issue the read commands just-in-time to eliminate the chance of read-before-write
-		// errors for realistic offset sizes. However, we want the data from the memory to arrive
-		// without stalling the kernel. The latency of a memory read is typically ~50 cycles, so
-		// we send the command 100 cycles before we need the data to give us a bit of a buffer.
-		io.forceExactIOSeparation(name+"_"+FROM_LMEM_NAME, name+"_"+LMEM_CMD_NAME, -100);
+		// However, we want the data from the memory to arrive without stalling the kernel.
+		// The latency of a memory read is typically ~50 cycles, but may be longer depending on
+		// the memory and kernel frequencies, among other factors. We'll send the command 500
+		// cycles in advance to be on the safe side.
+		io.forceExactIOSeparation(name+"_"+FROM_LMEM_NAME, name+"_"+LMEM_CMD_NAME, -500);
 	}
 
-	private T readInput(DFEVar posInBurst) {
-		DFEVector<T> fromLMem = io.input(name+"_"+FROM_LMEM_NAME, getLMemType(), posInBurst === 0);
+	private T readInput() {
+		DFEVar posInBurst = getPositionInBurst();
+		DFEVar fromLMemPadded = io.input(name+"_"+FROM_LMEM_NAME, dfeRawBits(getBurstSizeInBits()), posInBurst === 0);
+		DFEVector<T> fromLMem = getLMemType().unpack(fromLMemPadded.slice(0, getLMemType().getTotalBits()));
 		return control.mux(posInBurst, fromLMem.getElementsAsList());
 	}
 
-	private void writeOutput(DFEVar posInBurst) {
-		DFEVector<T> toLMem = io.output(name+"_"+TO_LMEM_NAME, getLMemType(), posInBurst === 0);
+	private void writeOutput() {
+		DFEVector<T> toLMem = getLMemType().newInstance(this);
 		for (int i = 0; i < getValuesPerBurst(); ++i) {
 			toLMem[i] <== stream.offset(val, +i);
 		}
+
+		DFEVar toLMemPadded = toLMem.pack();
+		int paddingBits = getBurstSizeInBits() - getLMemType().getTotalBits();
+		if (paddingBits > 0) toLMemPadded = constant.zero(dfeRawBits(paddingBits)) # toLMemPadded;
+
+		io.output(name+"_"+TO_LMEM_NAME, dfeRawBits(getBurstSizeInBits()), getPositionInBurst() === 0) <== toLMemPadded;
 	}
 
-	private void sendLMemCommands(DFEVar burst, DFEVar posInBurst) {
+	private void sendLMemCommands() {
 		DFEVar burstOffset = io.scalarInput(name+"_burstOffset", dfeUInt(32));
+
+		Counter posInBurstCntr = getPositionInBurstCounter();
+		DFEVar  posInBurst     = posInBurstCntr.getCount();
+
+		DFEVar burst =
+			control.count.makeCounter(
+					control.count.makeParams(MathUtils.bitsToAddress(getNumberOfBursts()))
+					             .withEnable(posInBurstCntr.getWrap())
+					             .withReset(getPosition() === 0)
+					).getCount();
 
 		int lastCmdSize  = getNumberOfBursts() % BURSTS_PER_COMMAND;
 		int lastCmdBurst = getNumberOfBursts() - lastCmdSize;
@@ -120,13 +125,32 @@ public class LargeStreamOffset<T extends KernelObjectVectorizable<T, ?>> extends
 			<== LMemCommandStream.cmdReadOrWrite(addr, size, inc, stream, tag);
 	}
 
+	private DFEVar getPosition() {
+		// if only simpleCounter was this simple!
+		return control.count.makeCounterChain().addCounter(-offset, 1);
+	}
+
+	private DFEVar getPositionInBurst() {
+		return getPositionInBurstCounter().getCount();
+	}
+
+	private Counter getPositionInBurstCounter() {
+		return control.count.makeCounter(
+				control.count.makeParams(MathUtils.bitsToAddress(getValuesPerBurst()))
+				             .withMax(getValuesPerBurst())
+				             .withReset(getPosition() === 0));
+	}
+
 	private int getNumberOfBursts() {
 		return MathUtils.ceilDivide(-offset, getValuesPerBurst());
 	}
 
 	private int getValuesPerBurst() {
-		int burstSize = 8 * getManager().getManagerConfiguration().dram.getAdjustedBurstSizeInBytes();
-		return MathUtils.exactDivide(burstSize, val.getType().getTotalBits());
+		return getBurstSizeInBits() / val.getType().getTotalBits();
+	}
+
+	private int getBurstSizeInBits() {
+		return 8 * getManager().getManagerConfiguration().dram.getAdjustedBurstSizeInBytes();
 	}
 
 	private DFEVectorType<T> getLMemType() {
