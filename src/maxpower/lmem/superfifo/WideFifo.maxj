@@ -1,0 +1,98 @@
+package maxpower.lmem.superfifo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.BufferSpec;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.DFEsmFifoConfig;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.buffer.DFEsmFifo;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class WideFifo extends StateMachineLib {
+	private static final int maxIndividualWidth = 1024;
+	private final int numIndividualFifos;
+	private final List<DFEsmFifo> internalFifos;
+	private final List<DFEsmStateValue> internalFifosValid;
+	private final List<DFEsmStateValue> internalFifosProgFull;
+	private final List<DFEsmStateValue> internalFifosData;
+	private final DFEsmStateValue wideFifoFull;
+
+
+	public WideFifo(StateMachineLib lib, int width, int depth, int progEmptyLevel, int progFullLevel) {
+		super(lib);
+
+		DFEsmFifoConfig fifoConfig = new DFEsmFifoConfig();
+		fifoConfig.setBufferSpec(BufferSpec.UseBlockRam);
+		fifoConfig.setProgrammableEmpty(progEmptyLevel);
+		fifoConfig.setProgrammableFull(progFullLevel-2);
+
+		numIndividualFifos = MathUtils.ceilDivide(width, maxIndividualWidth);
+
+		internalFifos = new ArrayList<DFEsmFifo>(numIndividualFifos);
+		internalFifosValid = new ArrayList<DFEsmStateValue>(numIndividualFifos);
+		internalFifosProgFull = new ArrayList<DFEsmStateValue>(numIndividualFifos);
+		internalFifosData = new ArrayList<DFEsmStateValue>(numIndividualFifos);
+
+		wideFifoFull = _State.value(state, dfeBool(), true, "wideFifoFull");
+
+		for (int i=0; i < numIndividualFifos; i++) {
+			int widthNow = Math.min(maxIndividualWidth, width - i*maxIndividualWidth);
+			internalFifos.add(buffer.fifo(dfeUInt(widthNow), depth, fifoConfig));
+			internalFifosData.add(_State.value(state, dfeUInt(widthNow), false, "internalFifo_data" + i));
+			internalFifosValid.add(_State.value(state, dfeBool(), false, "internalFifo_valid" + i));
+			internalFifosProgFull.add(_State.value(state, dfeBool(), false, "internalFifo_stall" + i));
+		}
+	}
+
+	public void next(DFEsmValue inputValid, DFEsmValue inputData) {
+		int base = 0;
+		for (int i=0; i < numIndividualFifos; i++) {
+			internalFifosValid[i].next <== inputValid;
+			internalFifosData[i].next <== inputData.slice(base, internalFifosData[i].getType().getTotalBits());
+			base += internalFifosData[i].getType().getTotalBits();
+
+			internalFifos[i].input.dataIn <== internalFifosData[i];
+			internalFifos[i].input.writeEnable <== internalFifosValid[i];
+			internalFifosProgFull[i].next <== internalFifos[i].input.progFull;
+		}
+
+		DFEsmValue full = null;
+		for (int i=0; i < numIndividualFifos; i++) {
+			if (full == null) full = internalFifosProgFull[i];
+			else full = internalFifosProgFull[i] | full;
+		}
+
+		wideFifoFull.next <== full;
+	}
+
+	public DFEsmValue getEmpty() {
+		return internalFifos[0].output.empty;
+	}
+
+	public DFEsmValue getProgEmpty() {
+		return internalFifos[0].output.progEmpty;
+	}
+
+	public DFEsmValue getDataOut() {
+		DFEsmValue cat = null;
+		for (int i=0; i < numIndividualFifos; i++) {
+			if (cat == null) cat = internalFifos[i].output.dataOut;
+			else cat = internalFifos[i].output.dataOut # cat;
+		}
+		return cat;
+	}
+
+	public void connectReadEnable(DFEsmValue rd_en) {
+		for (int i=0; i < numIndividualFifos; i++) {
+			internalFifos[i].output.readEnable <== rd_en;
+		}
+	}
+
+	public DFEsmValue getProgFull() {
+		return wideFifoFull;
+	}
+}

@@ -1,0 +1,189 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer.proto;
+
+import maxpower.network.tcp.manyconn.framer.TCPFramerSM;
+import maxpower.network.tcp.manyconn.framer.TCPFramerSM.FramerStates;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes;
+
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class FIXProtoSpec extends FramerProtocolSpec {
+	private static final int mostSignificantDigitPower = 4;
+	private static final int maxNumBodyLengthDigits = 8;
+	private static final int minHeaderSizeBytes = "8=FIX.4.2\19=\1".length() + maxNumBodyLengthDigits;
+	private static final int checksumLength = "10=xxx\1".length();
+	private static final int lengthDelimOffset = "8=FIX.4.2".length();
+	private static final int lengthOffset = "8=FIX.4.2\19=".length();
+	private static final DFEsmValueType numBodyLengthDigitsType = dfeUInt(MathUtils.bitsToRepresent(maxNumBodyLengthDigits));
+
+	private final TCPFramerSM owner;
+	private final DFEsmStateValue lengthSize;
+
+
+
+	protected FIXProtoSpec(TCPFramerSM owner) {
+		super(owner);
+		this.owner = owner;
+		lengthSize = _State.value(owner.state, numBodyLengthDigitsType, 0, "lengthSize");
+	}
+
+
+	@Override
+	public DFEsmValue verifySignature(DFEsmValue stagingReg) {
+		return (SMUtils.extractByte(stagingReg, lengthDelimOffset) === 1) &
+				(SMUtils.extractByte(stagingReg, lengthDelimOffset + 1) === '9') &
+				(SMUtils.extractByte(stagingReg, lengthDelimOffset + 2) === '=');
+	}
+
+	private DFEsmValue decodeLengthString(DFEsmValue stagingReg) {
+		return decodeString(
+				SMUtils.extractBytes(stagingReg,
+						lengthOffset + maxNumBodyLengthDigits,
+						lengthOffset),
+						lengthSize);
+	}
+
+	@Override
+	public DFEsmValue decodeMessageLength(DFEsmValue stagingReg) {
+		DFEsmValue decodedLength = decodeLengthString(stagingReg);
+		DFEsmValue totalMessageLen = decodedLength + lengthSize.cast(TCPFramerTypes.lengthType) +
+				constant.value(TCPFramerTypes.lengthType, checksumLength + lengthOffset + 1);
+
+		IF (owner.getCurrentState() === FramerStates.PipeMessageLengthDecode) {
+			owner.printf("decodedFIXLength: %d, lengthSize: %d, " +
+					"totalMessageLength <-- %d\n",
+					decodedLength, lengthSize,
+					totalMessageLen);
+		}
+
+		return totalMessageLen;
+	}
+
+	@Override
+	public DFEsmValue validateLength(DFEsmValue stagingReg) {
+		DFEsmAssignableValue lengthSanityGood = assignable.value(StateMachineLib.dfeBool());
+
+		lengthSanityGood <== false;
+		lengthSize.next <== 0;
+		for (int i=1; i <= maxNumBodyLengthDigits; i++) {
+			DFEsmValue extractedChar = SMUtils.extractByte(stagingReg, lengthOffset+i);
+			DFEsmValue isDelim = extractedChar === 1;
+
+			if (i==1) _IF(isDelim);
+			else _ELSE_IF(isDelim);
+			lengthSanityGood <== true;
+			lengthSize.next <== constant.value(numBodyLengthDigitsType, i);
+		}
+		_END_IF();
+
+		DFEsmAssignableValue isNumber = assignable.value(StateMachineLib.dfeBool());
+		isNumber <== true;
+
+		for (int i=0; i <= maxNumBodyLengthDigits; i++) {
+			DFEsmValue extractedChar = SMUtils.extractByte(stagingReg, lengthOffset+i);
+			DFEsmValue isDelim = extractedChar === 1;
+
+			IF (owner.getCurrentState() === FramerStates.PipeMessageLengthDecode) {
+				owner.printf("Length Test: Index " + i + ": extractedChar = %d ---> isDelim = %d\n", extractedChar, isDelim);
+			}
+		}
+
+		return lengthSanityGood;
+	}
+
+	private DFEsmValue decodeString(DFEsmValue s, DFEsmValue stringLength) {
+		IF (owner.getCurrentState() === FramerStates.PipeMessageLengthDecode) {
+			owner.printf("decodeString: (Length = %d) ", stringLength);
+			owner.printString(s);
+		}
+
+		DFEsmAssignableValue sum = assignable.value(TCPFramerTypes.lengthType);
+		for (int power=0; power < maxNumBodyLengthDigits; power++) {
+			DFEsmAssignableValue byteOfInterest = assignable.value(dfeUInt(4));
+			byteOfInterest <== 0;
+			for (int l = 1; l <= maxNumBodyLengthDigits; l++) {
+				if (power < l) {
+					IF (stringLength === l) {
+						/*
+						 * Slicing is good enough, no need to subtract '0'
+						 * This is because '0' = 0x30
+						 * And 0x30 % 16 == 0
+						 */
+						byteOfInterest <== SMUtils.extractByte(s, l - (power + 1)).slice(0, 4);
+					}
+				}
+			}
+
+			DFEsmValue address = byteOfInterest;
+			if (power <= mostSignificantDigitPower) {
+				DFEsmValue contribution = lookupContribution(power, address);
+
+					IF (owner.getCurrentState() === FramerStates.PipeMessageLengthDecode) {
+						owner.printf("Index %d, Address: %d, contribution %d\n", power, address, contribution);
+					}
+					if (power == 0)	sum <== contribution;
+					else sum <== sum + contribution;
+			}
+		}
+		IF (owner.getCurrentState() === FramerStates.PipeMessageLengthDecode) owner.printf("sum = %d\n", sum);
+
+		return sum;
+	}
+
+	private DFEsmValue lookupContribution(int power, DFEsmValue index) {
+		if (power > mostSignificantDigitPower) return constant.value(TCPFramerTypes.lengthType, 0);
+		if (power == 0) return index.cast(TCPFramerTypes.lengthType);
+
+		DFEsmAssignableValue contrib = assignable.value(TCPFramerTypes.lengthType);
+		contrib <== constant.value(TCPFramerTypes.lengthType, 0);
+
+		int factor = (int)Math.pow(10, power);
+		_SWITCH (index); {
+			for (int i=1; i < 10; i++) {
+				_CASE(i); {
+					contrib <== constant.value(TCPFramerTypes.lengthType, i * factor);
+				}
+			}
+			_OTHERWISE(); {
+				contrib <== constant.value(TCPFramerTypes.lengthType, 0);
+			}
+		}
+		_END_SWITCH();
+		return contrib;
+	}
+
+	@Override
+	public String getProtocolName() {
+		return "FIX";
+	}
+
+
+	@Override
+	public void addMaxfileConstants(DFEManager owner) {
+		owner.addMaxFileConstant(getProtocolName() + "_maxNumBodyLengthDigits", maxNumBodyLengthDigits);
+		owner.addMaxFileConstant(getProtocolName() + "_checksumLength", checksumLength);
+		owner.addMaxFileConstant(getProtocolName() + "_lengthDelimOffset", lengthDelimOffset);
+		owner.addMaxFileConstant(getProtocolName() + "_lengthOffset", lengthOffset);
+	}
+
+
+	@Override
+	public int getMinimumHeaderSizeBytes() {
+		return minHeaderSizeBytes;
+	}
+}

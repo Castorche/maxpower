@@ -1,0 +1,124 @@
+package maxpower.lmem.superfifo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class PipelinedMux extends StateMachineLib {
+	private final List<List<DFEsmStateValue>> stages;
+	private final DFEsmValueType type;
+	private final int order;
+	private final int numInputs;
+	private final int selectWidth;
+	private final int selectBitsPerStage;
+	private final int numStages;
+	private final ArrayList<DFEsmStateValue> selects;
+	private final DFEsmStateValue validShiftReg;
+
+	public PipelinedMux(StateMachineLib lib, DFEsmValueType inputType, int order, int numInputs) {
+		super(lib);
+
+		this.order = order;
+		this.numInputs = numInputs;
+		type = inputType;
+		selectBitsPerStage = MathUtils.bitsToAddress(order);
+		numStages = MathUtils.ceilDivide(MathUtils.bitsToAddress(numInputs), selectBitsPerStage);
+
+		selects = new ArrayList<DFEsmStateValue>();
+
+
+		selectWidth = MathUtils.bitsToAddress(numInputs);
+		int size = MathUtils.ceilDivide(numInputs, order);
+		stages = new ArrayList<List<DFEsmStateValue>>();
+		for (int s = 0; s < numStages; s++) {
+			if (s < numStages-1) selects.add(_State.value(state, dfeUInt(selectWidth), "stage" + (s+1) + "_Select"));
+			List<DFEsmStateValue> registers = new ArrayList<DFEsmStateValue>();
+
+			for (int r=0; r < size; r++) {
+				registers.add(_State.value(state,type, "stage" + s + "_reg" + r));
+			}
+			stages.add(registers);
+			size = MathUtils.ceilDivide(size, order);
+		}
+
+		validShiftReg = _State.value(state, dfeUInt(numStages), 0, "validShiftReg");
+	}
+
+	public DFEsmStateValue next(DFEsmValue valid, DFEsmValue select, List<DFEsmValue> inputs) {
+		if (inputs.size() != numInputs) throw new MaxCompilerAPIError("Number of inputs passed to the next function (%d), " +
+				"is not the same as the number of inputs used in the constructor (%d).\n",
+				inputs.size(), numInputs);
+
+		List<DFEsmValue> selectList = new ArrayList<DFEsmValue>();
+		List<List<DFEsmValue>> sourceList = new ArrayList<List<DFEsmValue>>();
+
+		validShiftReg.next <== validShiftReg[numStages-2:0] # valid;
+
+
+		for (int s = 0; s < numStages; s++) {
+			if (s == 0) {
+				sourceList.add(inputs);
+			} else {
+				List<DFEsmValue> sources = new ArrayList<DFEsmValue>();
+				for (DFEsmValue source : stages.get(s-1)) {
+					sources.add(source);
+				}
+				sourceList.add(sources);
+			}
+
+			if (s == 0) selectList.add(select);
+			else {
+				selects.get(s-1).next <== selectList.get(s-1);
+				selectList.add(selects.get(s-1));
+			}
+		}
+
+
+		int size = MathUtils.ceilDivide(numInputs, order);
+		for (int s = 0; s < numStages; s++) {
+			System.out.printf("PipelinedMux Stage %d: Map %d sources -> %d registers\n", s, sourceList.get(s).size(), stages.get(s).size());
+			DFEsmValue stageSelect = selectList.get(s).slice(s * selectBitsPerStage, Math.min(selectBitsPerStage, selectWidth - s * selectBitsPerStage));
+
+			for (int r=0; r < size; r++) {
+				int startIndex = r * order;
+				int muxSize = Math.min(order, sourceList.get(s).size() - startIndex);
+
+
+				DFEsmAssignableValue muxed = assignable.value(type);
+
+				muxed <== sourceList.get(s).get(startIndex);
+
+				_SWITCH(stageSelect);
+				for (int i=0; i < muxSize; i++) {
+					int sourceIndex = startIndex + i;
+					_CASE (i); {
+						muxed <== sourceList.get(s).get(sourceIndex);
+					}
+				}
+				_END_SWITCH();
+
+				stages.get(s).get(r).next <== muxed;
+			}
+
+			size = MathUtils.ceilDivide(size, order);
+		}
+
+		return stages.get(numStages-1).get(0);
+	}
+
+	public int getLatency() {
+		return numStages;
+	}
+
+	public DFEsmValue getValid() {
+		return validShiftReg[numStages-1];
+	}
+}

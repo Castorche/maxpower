@@ -1,0 +1,362 @@
+package maxpower.lmem.superfifo;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.LMemCommandStream;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmOutput;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateEnum;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerStateMachine;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class DDRFifo extends ManagerStateMachine {
+	public final int burstSizeBits ;
+	public static final long memorySizeBits = (24L*1024L*1024L*1024L*8);
+	public final long maxNumBursts;
+	private final long depth;
+	private final int almostEmptyThreshold = 16;
+	private final int almostFullThreshold = 16;
+	private final int wrapBitIndex;
+
+	private final DFEStructType cmdType;
+	private final DFEsmPushInput input;
+	private final DFEsmPullOutput output;
+	private final DFEsmPushOutput memCmdOutput;
+	private final DFEsmPushOutput dataToMem;
+	private final DFEsmPushInput dataFromMem;
+	private final DFEsmStateValue memWritePointer;
+	private final DFEsmStateValue memReadPointer;
+	private final DFEsmStateValue toMemStalling;
+	private final DFEsmStateValue memCmdStalling;
+	private final DFEsmStateValue memFifoFull;
+	private final DFEsmStateValue memFifoEmpty;
+	private final DFEsmStateValue memFifoAlmostFull;
+	private final DFEsmStateValue memFifoAlmostEmpty;
+	private final DFEsmStateValue memFifoFillLevel;
+	private final DFEsmStateValue memCmdReg;
+	private final DFEsmStateValue memCmdRegValid;
+	private final DFEsmStateValue memWriteCommitPointer;
+	private final DFEsmStateValue inputValidReg;
+	private final DFEsmStateValue outputValidReg;
+	private final DFEsmStateValue memReadCommitPointer;
+	private final DFEsmStateEnum<States> currentState;
+	private final DFEsmStateValue internalFifoFull;
+	private final int writeStreamID;
+	private final int readStreamID;
+	private final long basAddressBursts;
+	private final DFEsmStateValue dataFromMemReg;
+	private final DFEsmStateValue dataFromMemRegValid;
+	private final DFEsmStateValue shouldStallDownstream;
+	private final DFEsmOutput memCmdStallingScalar;
+	private final DFEsmOutput internalFifoFullScalar;
+	private final DFEsmOutput memFifoFillLevelScalar;
+	private final DFEsmOutput shouldStallDownstreamScalar;
+	private final DFEsmOutput memWritePointerScalar;
+	private final DFEsmOutput memReadPointerScalar;
+	private final DFEsmOutput memFifoAlmostFullScalar;
+	private final DFEsmOutput memFifoAlmostEmptyScalar;
+	private final WideFifo internalFifo;
+	private final DFEsmStateValue flagSelect;
+	private final int flag1;
+	private final int flag2;
+
+	private enum States {
+		Evaluate,
+
+		SubmitWrite,
+
+		SubmitRead_WriteWaitClear,
+		SubmitRead_WriteSet,
+
+		SubmitRead_ReadWaitSet,
+		SubmitRead,
+		SubmitRead_ReadClear
+	}
+
+	private enum MemCommand {
+		NOP                          (0),
+		ClearFlags                   (1),
+		SetFlags                     (2),
+		BlockUntilFlagsSet           (4),
+		BlockUntilFlagsCleared       (5);
+
+		private final int m_cmdCode;
+		private MemCommand(int cmdCode) {m_cmdCode = cmdCode;}
+		public int getInstructionCode() {return m_cmdCode;}
+	}
+
+	public static final String OUTPUT_MEM_COMMAND = "memCmd";
+	public static final String OUTPUT_MEM_DATA = "dataToMem";
+
+	public static final String INPUT_MEM_DATA = "dataFromMem";
+
+	public static final String OUTPUT_DATA = "output";
+	public static final String INPUT_DATA = "input";
+
+	public DDRFifo(DFEManager owner,
+			long basAddressBursts, long depthBursts,
+			int writeStreamID, int readStreamID, int flag1, int flag2) {
+		super(owner);
+
+		this.flag1 = flag1;
+		this.flag2 = flag2;
+		burstSizeBits = owner.getManagerConfiguration().dram.getAdjustedBurstSizeInBytes() * 8;
+		maxNumBursts = memorySizeBits / burstSizeBits;
+
+
+		logInfo("DDR FIFO: burstSizeBits = %d, maxNumBursts = %d, writeStreamID = %d, readStreamID = %d, depthBursts = %d, basAddressBursts=%d\n",
+				burstSizeBits, maxNumBursts,
+				writeStreamID, readStreamID, depthBursts, basAddressBursts);
+
+		cmdType = LMemCommandStream.getLMemCommandDFEStructType();
+
+		depth = depthBursts;
+		this.writeStreamID = writeStreamID;
+		this.readStreamID = readStreamID;
+		this.basAddressBursts = basAddressBursts;
+
+		if (!MathUtils.isPowerOf2((int)depthBursts))
+			throw new MaxCompilerAPIError("Depth (%d) needs to be a power of 2. Nearest larger value is %d\n", depthBursts,
+					MathUtils.nextPowerOfTwo((int)depthBursts));
+
+		memCmdReg = _State.value(state, dfeUInt(cmdType.getTotalBits()), "memCmdReg");
+		memCmdRegValid = _State.value(state, dfeBool(), false, "memCmdRegValid");
+		memCmdOutput = io.pushOutput(OUTPUT_MEM_COMMAND, dfeUInt(cmdType.getTotalBits()), 4);
+		dataToMem = io.pushOutput(OUTPUT_MEM_DATA, dfeUInt(burstSizeBits), 16);
+		dataFromMem = io.pushInput(INPUT_MEM_DATA, dfeUInt(burstSizeBits), 16);
+
+		memWriteCommitPointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)), 0, "memWriteCommitPointer");
+		memReadCommitPointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)), 0, "memReadCommitPointer");
+		memWritePointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)), 0, "memWritePointer");
+		memReadPointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)), 0, "memReadPointer");
+		wrapBitIndex = MathUtils.bitsToAddress(depthBursts);
+
+		toMemStalling = _State.value(state, dfeBool(), true, "toMemStalling");
+		memCmdStalling = _State.value(state, dfeBool(), true, "memCmdStalling");
+
+		memFifoFull = _State.value(state, dfeBool(), true, "memFifoFull");
+		memFifoEmpty = _State.value(state, dfeBool(), true, "memFifoEmpty");
+
+		memFifoAlmostFull = _State.value(state, dfeBool(), true, "memFifoAlmostFull");
+		memFifoAlmostEmpty = _State.value(state, dfeBool(), true, "memFifoAlmostEmpty");
+
+		shouldStallDownstream = _State.value(state, dfeBool(), true, "shouldStallDownstream");
+
+		memFifoFillLevel = _State.value(state, dfeUInt(MathUtils.bitsToRepresent(depthBursts)), 0, "memFifoFillLevel");
+
+
+		int internalFifoDepth = 512;
+		int progEmptyLevel = 32;
+		int progFullLevel = internalFifoDepth-64;
+		internalFifo = new WideFifo(this, burstSizeBits, internalFifoDepth, progEmptyLevel, progFullLevel);
+
+		input = io.pushInput(INPUT_DATA, dfeUInt(burstSizeBits), 16);
+		output = io.pullOutput(OUTPUT_DATA, dfeUInt(burstSizeBits), 16);
+
+		inputValidReg = _State.value(state, dfeBool(), false, "inputValidReg");
+		outputValidReg = _State.value(state, dfeBool(), false, "outputValidReg");
+
+		currentState = _State.enumerated(state, States.class, States.Evaluate, "currentState");
+		internalFifoFull = _State.value(state, dfeBool(), true, "internalFull");
+
+		dataFromMemReg = _State.value(state,  dfeUInt(burstSizeBits), "dataFromMemReg");
+		dataFromMemRegValid = _State.value(state,  dfeBool(), "dataFromMemRegValid");
+
+		memCmdStallingScalar = io.scalarOutput("memCmdStalling", dfeBool());
+		internalFifoFullScalar = io.scalarOutput("internalFifoFull", dfeBool());
+		memFifoFillLevelScalar = io.scalarOutput("memFifoFillLevel", dfeUInt(MathUtils.bitsToRepresent(depthBursts)));
+		memWritePointerScalar = io.scalarOutput("memWritePointer", dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)));
+		memReadPointerScalar = io.scalarOutput("memReadPointer", dfeUInt(1 + MathUtils.bitsToAddress(depthBursts)));
+		shouldStallDownstreamScalar = io.scalarOutput("shouldStallDownstream", dfeBool());
+		memFifoAlmostFullScalar = io.scalarOutput("memFifoAlmostFull", dfeBool());
+		memFifoAlmostEmptyScalar = io.scalarOutput("memFifoAlmostEmpty", dfeBool());
+
+		flagSelect = _State.value(state, dfeBool(), false, "flagSelect");
+	}
+
+	@Override
+	protected void nextState() {
+		internalFifoFull.next <== internalFifo.getProgFull();
+		inputValidReg.next <== input.valid;
+		outputValidReg.next <== output.read;
+		toMemStalling.next <== dataToMem.stall;
+		memCmdStalling.next <== memCmdOutput.stall;
+		shouldStallDownstream.next <== dataToMem.stall | memFifoAlmostFull;
+
+		IF (outputValidReg !== inputValidReg) {
+			IF (outputValidReg) {
+				memFifoFillLevel.next <== memFifoFillLevel - 1;
+			} ELSE {
+				memFifoFillLevel.next <== memFifoFillLevel + 1;
+			}
+		}
+
+		IF (inputValidReg) memWritePointer.next <== memWritePointer + 1;
+		IF (outputValidReg) memReadPointer.next <== memReadPointer + 1;
+
+		IF (inputValidReg) printf("memFifoFillLevel = %d, memWritePointer = %d, memReadPointer = %d\n", memFifoFillLevel, memWritePointer, memReadPointer);
+
+		memFifoEmpty.next <== memWritePointer === memReadPointer;
+		memFifoFull.next <== (memWritePointer.slice(0, wrapBitIndex) === memReadPointer.slice(0, wrapBitIndex)) &
+							 (memWritePointer.slice(wrapBitIndex, 1) !== memReadPointer.slice(wrapBitIndex, 1));
+
+		memFifoAlmostEmpty.next <== memFifoFillLevel <= almostEmptyThreshold;
+		memFifoAlmostFull.next <== memFifoFillLevel >= (depth - almostFullThreshold);
+
+		dataFromMemRegValid.next <== dataFromMem.valid;
+		dataFromMemReg.next <== dataFromMem;
+
+		internalFifo.next(dataFromMemRegValid, dataFromMemReg);
+
+		memCmdRegValid.next <== false;
+
+		DFEsmAssignableValue currentFlag = assignable.value(dfeUInt(32));
+		IF (flagSelect) currentFlag <== 1 << flag2;
+		ELSE currentFlag <== 1 << flag1;
+
+		SWITCH (currentState) {
+			CASE (States.Evaluate) {
+				IF (~memCmdStalling) {
+					printf("memWritePointer = %d, memWriteCommitPointer = %d, memReadCommitPointer = %d\n",
+							memWritePointer, memWriteCommitPointer, memReadCommitPointer);
+					IF (memWritePointer !== memWriteCommitPointer) {
+						currentState.next <== States.SubmitWrite;
+					} ELSE IF (~internalFifoFull & (memReadCommitPointer !== memWriteCommitPointer)) {
+						currentState.next <== States.SubmitRead_WriteWaitClear;
+					}
+				}
+			}
+
+			CASE (States.SubmitWrite) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.Evaluate;
+					memCmdRegValid.next <== true;
+					memWriteCommitPointer.next <== memWriteCommitPointer + 1;
+				}
+				makeReadOrWriteCommand(memCmdReg,
+						constant.value(dfeUInt(32), basAddressBursts) + memWriteCommitPointer.cast(dfeUInt(32)),
+						writeStreamID);
+			}
+
+			CASE (States.SubmitRead_WriteWaitClear) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.SubmitRead_WriteSet;
+					memCmdRegValid.next <== true;
+				}
+				makeWaitFlagCommand(memCmdReg, writeStreamID, currentFlag, false);
+			}
+
+			CASE (States.SubmitRead_WriteSet) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.SubmitRead_ReadWaitSet;
+					memCmdRegValid.next <== true;
+				}
+				makeSetFlagCommand(memCmdReg, writeStreamID, currentFlag, true);
+			}
+
+			CASE (States.SubmitRead_ReadWaitSet) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.SubmitRead;
+					memCmdRegValid.next <== true;
+				}
+				makeWaitFlagCommand(memCmdReg, readStreamID, currentFlag, true);
+			}
+
+			CASE (States.SubmitRead) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.SubmitRead_ReadClear;
+					memCmdRegValid.next <== true;
+					memReadCommitPointer.next <== memReadCommitPointer + 1;
+				}
+				makeReadOrWriteCommand(memCmdReg,
+						constant.value(dfeUInt(32), basAddressBursts) + memReadCommitPointer.cast(dfeUInt(32)),
+						readStreamID);
+			}
+
+			CASE (States.SubmitRead_ReadClear) {
+				IF (~memCmdStalling) {
+					currentState.next <== States.Evaluate;
+					memCmdRegValid.next <== true;
+					flagSelect.next <== ~flagSelect;
+				}
+				makeSetFlagCommand(memCmdReg, readStreamID, currentFlag, false);
+			}
+		}
+	}
+
+	private void makeWaitFlagCommand(DFEsmStateValue cmdReg, int streamIx, DFEsmValue flags, boolean untilSet) {
+		SMUtils.assignField(cmdReg.next, cmdType, "address", flags);
+		SMUtils.assignField(cmdReg.next, cmdType, "size", 0);
+		SMUtils.assignField(cmdReg.next, cmdType, "inc", untilSet ? MemCommand.BlockUntilFlagsSet.getInstructionCode() :
+																	MemCommand.BlockUntilFlagsCleared.getInstructionCode());
+		SMUtils.assignField(cmdReg.next, cmdType, "tag", 0);
+		SMUtils.assignField(cmdReg.next, cmdType, "stream", 1 << streamIx);
+	}
+
+	private void makeSetFlagCommand(DFEsmStateValue cmdReg, int streamIx, DFEsmValue flag, boolean set) {
+		SMUtils.assignField(cmdReg.next, cmdType, "address", flag);
+		SMUtils.assignField(cmdReg.next, cmdType, "size", 0);
+		SMUtils.assignField(cmdReg.next, cmdType, "inc", set ? MemCommand.SetFlags.getInstructionCode() :
+															   MemCommand.ClearFlags.getInstructionCode());
+		SMUtils.assignField(cmdReg.next, cmdType, "tag", 0);
+		SMUtils.assignField(cmdReg.next, cmdType, "stream", 1 << streamIx);
+	}
+
+	private void makeReadOrWriteCommand(DFEsmStateValue cmdReg, DFEsmValue address, int streamIx) {
+		SMUtils.assignField(cmdReg.next, cmdType, "address", address);
+		SMUtils.assignField(cmdReg.next, cmdType, "size", 1);
+		SMUtils.assignField(cmdReg.next, cmdType, "inc", 1);
+		SMUtils.assignField(cmdReg.next, cmdType, "tag", 0);
+		SMUtils.assignField(cmdReg.next, cmdType, "stream", 1 << streamIx);
+	}
+
+//	private void makeControlCommand(DFEsmStateValue cmdReg,  MemCommand cmd, int flagIx) {
+//		SMUtils.assignField(cmdReg.next, cmdType, "address", 1 << flagIx);
+//		SMUtils.assignField(cmdReg.next, cmdType, "size", 0);
+//		SMUtils.assignField(cmdReg.next, cmdType, "inc", cmd.getInstructionCode());
+//		SMUtils.assignField(cmdReg.next, cmdType, "tag", 0);
+//	}
+
+	void printf(String format, Object ...args) {
+//		debug.printf(format, args);
+	}
+
+	@Override
+	protected void outputFunction() {
+		dataToMem.valid <== input.valid;
+		input.stall <== shouldStallDownstream;
+		dataToMem <== input;
+
+
+		output.empty <== internalFifo.getEmpty();
+		output.almostEmpty <== internalFifo.getProgEmpty();
+
+		internalFifo.connectReadEnable(output.read);
+		output <== internalFifo.getDataOut();
+
+		memCmdOutput <== memCmdReg;
+		memCmdOutput.valid <== memCmdRegValid;
+
+//		IF (memCmdRegValid) debug.printf("Pushing out memory command: %x\n", memCmdReg);
+
+		dataFromMem.stall <== internalFifoFull;
+
+		memCmdStallingScalar <== memCmdStalling;
+		internalFifoFullScalar <== internalFifoFull;
+		memFifoFillLevelScalar <== memFifoFillLevel;
+		shouldStallDownstreamScalar <== shouldStallDownstream;
+		memWritePointerScalar <== memWritePointer;
+		memReadPointerScalar <== memReadPointer;
+		memFifoAlmostFullScalar <== memFifoAlmostFull;
+		memFifoAlmostEmptyScalar <== memFifoAlmostEmpty;
+	}
+
+}

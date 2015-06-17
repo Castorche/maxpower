@@ -1,0 +1,230 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer;
+
+import java.util.HashSet;
+import java.util.Set;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateEnum;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.networking.v1.framed_kernels.FramedLinkType;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class CoalescingBuffer extends StateMachineLib {
+	public static final String INPUT = "src";
+	public static final String OUTPUT = "dst";
+
+
+	private final int dataSizeBits;
+	private final int dataSizeBytes;
+	private final FramedLinkType type;
+	private final DFEStructType structType;
+	private final DFEsmValueType modContribType;
+	private final DFEsmValueType modType;
+
+	private final DFEsmStateValue staging;
+	private final DFEsmStateValue output_valid;
+	private final DFEsmStateValue output_word;
+
+	private final DFEsmStateEnum<CoalescingStates> coalescingState;
+	private final DFEsmStateValue fill;
+	private final DFEsmStateValue isFirstOutput;
+	private final SMPrinting printer;
+
+
+
+	private enum CoalescingStates {
+		Flow,
+		SeenEOF
+	}
+
+	public CoalescingBuffer(SMPrinting smprint, FramedLinkType type) {
+		super(smprint.getOwner());
+
+		printer = smprint;
+
+		this.type = type;
+		structType = type.getDFEStructType();
+
+		dataSizeBits = structType.getTypeForField(type.getData()).getTotalBits();
+		dataSizeBytes = dataSizeBits / 8;
+		modContribType = dfeUInt(MathUtils.bitsToRepresent(dataSizeBytes));
+		modType = dfeUInt(MathUtils.bitsToAddress(dataSizeBytes));
+
+		staging = _State.value(state, dfeUInt(2*structType.getTypeForField(type.getData()).getTotalBits()), "staging");
+
+
+		isFirstOutput = _State.value(state, dfeBool(), true, "isFirstOutput");
+
+
+		coalescingState = _State.enumerated(state, CoalescingStates.class, CoalescingStates.Flow, "coalescingState");
+		fill = _State.value(state, dfeUInt(MathUtils.bitsToAddress(32)), 0, "fill");
+
+		output_valid = _State.value(state, dfeBool(), false, "output_valid");
+		output_word = _State.value(state, dfeUInt(structType.getTotalBits()), "output_word");
+	}
+
+	public void nextState(DFEsmValue src_r, DFEsmValue valid_r) {
+
+		DFEsmValue sof_r = SMUtils.extractField(src_r, structType, type.getSOF());
+		DFEsmValue eof_r = SMUtils.extractField(src_r, structType, type.getEOF());
+		DFEsmValue mod = SMUtils.extractField(src_r, structType, type.getMod());
+
+		DFEsmAssignableValue mod_r = assignable.value(modContribType);
+		mod_r <== mod.cast(modContribType);
+		IF (mod === 0) {
+			mod_r <== 8;
+		}
+
+		DFEsmValue data_r = SMUtils.extractField(src_r, structType, type.getData());
+
+
+		IF (valid_r) {
+			printf(" Sof=%d, Eof=%d, mod=%d, data = ", sof_r, eof_r, mod_r);
+			printer.printString(data_r);
+		}
+
+
+//		IF (valid_r | output_valid) {
+//			printf("Fill = %d, fill.next = %d, valid_r = %d, output_valid = %d, mod_r = %d\n",
+//					fill, fill.next, valid_r, output_valid, mod_r);
+//		}
+
+		IF (valid_r & sof_r) {
+			/*
+			 * Copy any other struct fields from the SOF word
+			 */
+			Set<String> fields = new HashSet<String>(structType.getFieldNames());
+			fields.remove(type.getSOF());
+			fields.remove(type.getEOF());
+			fields.remove(type.getMod());
+			fields.remove(type.getData());
+
+			for (String field : fields) {
+//				printf("Coalesce: Assigning field: " + field + " --> %d\n", SMUtils.extractField(src_r, structType, field));
+				SMUtils.assignField(output_word.next, structType, field, SMUtils.extractField(src_r, structType, field));
+			}
+		}
+
+		IF (fill > 8) {
+			staging.next[SMUtils.B(dataSizeBytes)-1:0] <== staging[SMUtils.B(2*dataSizeBytes)-1:SMUtils.B(dataSizeBytes)];
+		}
+
+		shiftLeftAndLatch(data_r, staging, fill.cast(modType));
+		SMUtils.assignField(output_word.next, structType, type.getData(), staging.slice(0, SMUtils.B(dataSizeBytes)));
+
+		SMUtils.assignField(output_word.next, structType, type.getSOF(), isFirstOutput);
+		SMUtils.assignField(output_word.next, structType, type.getEOF(), false);
+		SMUtils.assignField(output_word.next, structType, type.getMod(), 0);
+
+		DFEsmValue outputReady = fill >= constant.value(fill.getType(), 8);
+
+		output_valid.next <== false;
+		SWITCH (coalescingState) {
+			CASE (CoalescingStates.Flow) {
+				IF (valid_r & eof_r) coalescingState.next <== CoalescingStates.SeenEOF;
+
+				IF (valid_r & sof_r & eof_r) {
+					fill.next <== 0;
+					isFirstOutput.next <== true;
+					output_valid.next <== true;
+					SMUtils.assignField(output_word.next, structType, type.getSOF(), true);
+					SMUtils.assignField(output_word.next, structType, type.getEOF(), true);
+					SMUtils.assignField(output_word.next, structType, type.getMod(), mod_r.cast(modType));
+					SMUtils.assignField(output_word.next, structType, type.getData(), data_r);
+
+					coalescingState.next <== CoalescingStates.Flow;
+				} ELSE IF (outputReady) {
+					isFirstOutput.next <== false;
+					output_valid.next <== true;
+					IF (valid_r) {
+						IF (mod_r < 8) {
+							fill.next <== fill - (8 - mod_r).cast(fill.getType());
+						} ELSE {
+							fill.next <== fill + (mod_r - 8).cast(fill.getType());
+						}
+					} ELSE {
+						fill.next <== fill - 8;
+					}
+				} ELSE IF (valid_r) {
+					fill.next <== fill + mod_r.cast(fill.getType());
+				}
+				IF (valid_r | outputReady) {
+					printf("fill = %d -> %d, isFirstOutput = %d -> %d\n", fill, fill.next, isFirstOutput, isFirstOutput.next);
+					printf("%s -> %s\n", coalescingState, coalescingState.next);
+				}
+			}
+
+			CASE (CoalescingStates.SeenEOF) {
+				IF (fill !== 0) {
+					output_valid.next <== true;
+
+					IF (outputReady) {
+						isFirstOutput.next <== false;
+						fill.next <== fill - 8;
+						IF (fill === 8) {
+							SMUtils.assignField(output_word.next, structType, type.getEOF(), true);
+						}
+					} ELSE {
+						fill.next <== 0;
+						SMUtils.assignField(output_word.next, structType, type.getMod(), fill.cast(modType));
+						SMUtils.assignField(output_word.next, structType, type.getEOF(), true);
+						coalescingState.next <== CoalescingStates.Flow;
+						isFirstOutput.next <== true;
+					}
+				} ELSE {
+					isFirstOutput.next <== true;
+					coalescingState.next <== CoalescingStates.Flow;
+				}
+
+				printf("fill = %d -> %d, isFirstOutput = %d -> %d, output_valid %d -> %d\n",
+						fill, fill.next, isFirstOutput, isFirstOutput.next,
+						output_valid, output_valid.next);
+				printf("%s -> %s\n", coalescingState, coalescingState.next);
+			}
+		}
+	}
+
+	private void shiftLeftAndLatch(DFEsmValue data, DFEsmStateValue target, DFEsmValue pos) {
+		final int dataSizeBits = data.getType().getTotalBits();
+		final int dataSizeBytes = dataSizeBits / 8;
+
+		final DFEsmValueType posType = pos.getType();
+		if (posType.getTotalBits() != MathUtils.bitsToAddress(dataSizeBytes))
+			throw new MaxCompilerAPIError("pos type must be %d bits, to address %d bytes.", posType.getTotalBits(), dataSizeBytes);
+
+		for (int p=0; p < dataSizeBytes; p++) {
+			IF (pos === constant.value(posType, p)) {
+				target.next[SMUtils.B(dataSizeBytes+p)-1:SMUtils.B(p)] <== data;
+			}
+		}
+	}
+
+	public DFEsmValue getOutputData() {
+		return output_word;
+	}
+
+
+	public DFEsmValue getOutputDataValid() {
+		return output_valid;
+	}
+
+
+	private void printf(String format, Object ... args) {
+		printer.printf(this.getClass().getSimpleName(), coalescingState, format, args);
+	}
+}

@@ -1,0 +1,119 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class ByteLevelShift extends StateMachineLib {
+	private final List<DFEsmStateValue> stages;
+	private final int inputSizeBytes;
+	private final int stageSize;
+	private final int numStages;
+
+	private final DFEsmStateValue stageSelect;
+	private final DFEsmStateValue output;
+	private final ShiftDirection shiftDirection;
+
+	public enum ShiftDirection {
+		/**
+		 * Inserts 0 as LSBs
+		 */
+		Left,
+
+		/**
+		 * Inserts 0 as MSBs
+		 */
+		Right
+	}
+
+	public ByteLevelShift(StateMachineLib lib, String name, ShiftDirection direction, int sizeBytes) {
+		super(lib);
+
+		this.inputSizeBytes = sizeBytes;
+		DFEsmValueType type = dfeUInt(SMUtils.B(sizeBytes));
+
+		shiftDirection = direction;
+		stageSize = 4;
+
+		numStages = MathUtils.ceilDivide(sizeBytes, stageSize);
+		stages = new ArrayList<DFEsmStateValue>(numStages);
+		for (int stage=0; stage < numStages; stage++) {
+			stages.add(_State.value(state, type, name + "Stage" + stage));
+		}
+
+
+		int stageSelectWidth = MathUtils.bitsToAddress(numStages);
+
+		stageSelect = _State.value(state, dfeUInt(stageSelectWidth), name + "StageSelect");
+
+		output = _State.value(state, type, name + "Output");
+
+	}
+
+	public DFEsmValue next(DFEsmValue inputData, DFEsmValue shiftAmount) {
+		List<DFEsmValue> permutations = new ArrayList<DFEsmValue>(inputSizeBytes);
+
+		for (int i=0; i < inputSizeBytes; i++) {
+			if (shiftDirection == ShiftDirection.Left)
+				permutations.add(SMUtils.shiftLeft(this, inputData, i * 8));
+			else
+				permutations.add(SMUtils.shiftRight(this, inputData, i * 8));
+		}
+
+		DFEsmValue subSelect = shiftAmount[1:0];
+		DFEsmValue stageSelectComb = shiftAmount[shiftAmount.getType().getTotalBits()-1:2];
+
+		stageSelect.next <== stageSelectComb;
+
+		// Mux in 2 stages
+		for (int currentStage = 0; currentStage < numStages; currentStage++) {
+			for (int i=0; i < stageSize; i++) {
+				int offset = currentStage*stageSize + i;
+
+				IF (subSelect === i)
+					stages.get(currentStage).next <== permutations.get(offset);
+			}
+		}
+
+		for (int stage=0; stage < numStages; stage++) {
+			IF (stageSelect === stage)
+				output.next <== stages.get(stage);
+		}
+
+		return output;
+	}
+
+	public DFEsmValue nextSingleCycle(DFEsmValue inputData, DFEsmValue shiftAmount) {
+		List<DFEsmValue> permutations = new ArrayList<DFEsmValue>(inputSizeBytes);
+
+		for (int i=0; i < inputSizeBytes; i++) {
+			if (shiftDirection == ShiftDirection.Left)
+				permutations.add(SMUtils.shiftLeft(this, inputData, i * 8));
+			else
+				permutations.add(SMUtils.shiftRight(this, inputData, i * 8));
+		}
+
+
+		for (int i=0; i < inputSizeBytes; i++) {
+			IF (shiftAmount === i)
+				output.next <== permutations.get(i);
+		}
+
+		return output;
+	}
+}

@@ -1,0 +1,27 @@
+NAME=ddrFifoTest
+DESIGNNAME=DDRFifoTest
+CC=gcc
+
+include $(MAXCOMPILERDIR)/lib/Makefile.include
+
+CFLAGS += -O1 -std=gnu99 -Wall -Wextra 
+CFLAGS += $(MAXCOMPILER_INC) 
+LDFLAGS += -ggdb $(MAXCOMPILER_LIBS)
+
+%.o: %.max
+	$(MAXFILECOMPILE) $^ $@ $*
+
+TARGETS := $(NAME) 
+
+all: $(TARGETS)
+
+$(NAME): $(NAME).o \
+	$(DESIGNNAME).o 
+	$(CC) $^ $(LDFLAGS) -o $@
+
+restart_sim:
+	$(MAXCOMPILERDIR)/bin/maxcompilersim -c MAX3424A restart
+
+
+clean:
+	$(RM) *.o $(TARGETS)

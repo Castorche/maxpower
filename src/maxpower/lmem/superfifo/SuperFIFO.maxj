@@ -1,0 +1,438 @@
+package maxpower.lmem.superfifo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom._CustomManagers;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.StateMachineBlock;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateEnum;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerStateMachine;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.BufferSpec;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.DFEsmFifoConfig;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.buffer.DFEsmFifo;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.maxeleros.managerblocks.DualAspectPush;
+import com.maxeler.maxeleros.managercompiler.core.WrapperNode.IODesc;
+import com.maxeler.statemachine.utils.SMUtils;
+import com.maxeler.utils.MemoryManager;
+
+public class SuperFIFO extends ManagerStateMachine {
+	public static final String INPUT_FIFO = "fifo_in";
+	public static final String OUTPUT_FIFO = "fifo_out";
+	public static final String OUTPUT_EXTERNAL_WRITE = "external_write";
+	public static final String INPUT_EXTERNAL_READ = "external_read";
+
+	public static class FifoIO {
+		public DFELink write;
+		public DFELink read;
+	}
+
+	public static FifoIO create(CustomManager manager, String name, DFEType slotType, long depth, MemoryManager memoryMgr) {
+
+		manager.getManagerConfiguration().dram.setEnableFlagCommands(true);
+
+		long memoryBaseAddress = memoryMgr.allocBursts(name + "_superFifo", getMemoryUsageBursts(manager, depth, slotType));
+		manager.addMaxFileConstant(name + "_superFifo_baseAddress", (int)memoryBaseAddress);
+
+		StateMachineBlock superFifo = manager.addStateMachine(name + "_superFifo",
+				new SuperFIFO(manager, name,
+					slotType.getTotalBits(),
+					depth,
+					memoryBaseAddress));
+
+		StateMachineBlock wire = manager.addStateMachine(name + "_cmdWire", new SimpleWire(manager, 64));
+
+//		MemoryControllerConfig mcc = new MemoryControllerConfig();
+//		mcc.setCMDQSize(1);
+//		if (manager.getManagerConfiguration().getBoardModel() == MaxelerBoardModel.MAX4AB24A)
+//			mcc.setEnableParityMode(true, true, 72, false);
+//		manager.config.setMemoryControllerConfig(mcc);
+
+
+		MemoryControlGroup ctrlGroup = manager.addMemoryControlGroup(name + "_ctrlGroup", wire.getOutput(SimpleWire.OUTPUT));
+
+		DFELink writeMemStream = manager.addStreamToOnCardMemory(name + "_writeMemStream", ctrlGroup);
+		DFELink readMemStream = manager.addStreamFromOnCardMemory(name + "_readMemStream", ctrlGroup);
+		ctrlGroup.finalise();
+
+		long burstsNeeded = getMemoryUsageBursts(manager, depth, slotType);
+
+		manager.logInfo("Super FIFO: Base @ 0x%x, Size: %d bursts\n", memoryBaseAddress, burstsNeeded);
+
+		StateMachineBlock ddrFifo = manager.addStateMachine(name + "_ddrFifo",
+				new DDRFifo(manager,
+					memoryBaseAddress,
+					burstsNeeded,
+					ctrlGroup.getStreamIndexIdWithinGroup(name + "_writeMemStream"),
+					ctrlGroup.getStreamIndexIdWithinGroup(name + "_readMemStream"),
+					memoryMgr.allocMemoryFlag(name + "_ddrFifo_flag1"), memoryMgr.allocMemoryFlag(name + "_ddrFifo_flag2")));
+
+		wire.getInput(SimpleWire.INPUT) <== ddrFifo.getOutput(DDRFifo.OUTPUT_MEM_COMMAND);
+		writeMemStream <== ddrFifo.getOutput(DDRFifo.OUTPUT_MEM_DATA);
+
+		IODesc src_desc = _CustomManagers.streamToImp(readMemStream).getSource();
+		int src_width = src_desc.getWidth();
+
+		IODesc dst_desc = _CustomManagers.streamToImp(ddrFifo.getInput(DDRFifo.INPUT_MEM_DATA)).getSink();
+		int dst_width = dst_desc.getWidth();
+
+		if (src_width < dst_width) {
+			StateMachineBlock dap = manager.addStateMachine(name + "_dualAspectPush_ddrFifoRead",
+					new DualAspectPush(manager, readMemStream, ddrFifo.getInput(DDRFifo.INPUT_MEM_DATA), 10));
+			dap.getInput("src") <== readMemStream;
+			ddrFifo.getInput(DDRFifo.INPUT_MEM_DATA) <== dap.getOutput("dst");
+		} else {
+			ddrFifo.getInput(DDRFifo.INPUT_MEM_DATA) <== readMemStream;
+		}
+
+
+
+		superFifo.getInput(SuperFIFO.INPUT_EXTERNAL_READ) <== ddrFifo.getOutput(DDRFifo.OUTPUT_DATA);
+		ddrFifo.getInput(DDRFifo.INPUT_DATA) <== superFifo.getOutput(SuperFIFO.OUTPUT_EXTERNAL_WRITE);
+
+		FifoIO fifoIO = new FifoIO();
+		fifoIO.write = superFifo.getInput(SuperFIFO.INPUT_FIFO);
+		fifoIO.read = superFifo.getOutput(SuperFIFO.OUTPUT_FIFO);
+
+		return fifoIO;
+	}
+
+	public static int nextUsableWidth(CustomManager manager, int w) {
+		int burstWidth = manager.getManagerConfiguration().dram.getAdjustedBurstSizeInBytes() * 8;
+
+		while ((burstWidth % w) != 0 && w < burstWidth) {
+			w = MathUtils.nextMultiple(w + 1, 64);
+		}
+
+		if (w > burstWidth)
+			throw new MaxCompilerAPIError("Can't find a usable width for a superFifo: Requested width %d, burst width %d\n", w, burstWidth);
+
+
+		return w;
+	}
+
+	public static long getMemoryUsageBursts(DFEManager manager, long depth, DFEType slotType) {
+		long burstSizeBits = manager.getManagerConfiguration().dram.getAdjustedBurstSizeInBytes() * 8;
+
+		return MathUtils.nextPowerOfTwo((int) (depth * slotType.getTotalBits() / burstSizeBits));
+	}
+
+
+	private enum States {
+		InternalFifo,
+		ExternalFifo,
+		PushBurst
+	}
+
+	private enum ReaderStates {
+		WaitForData,
+		PullBurst,
+		PullBurstPipe,
+		FillInternalFifo,
+		MuxLatency
+	}
+
+	private final String superFifoName;
+	private final int wordsPerBurst;
+	private final int wordWidth;
+	private final int burstSizeBits;
+	private final int maxInternalFifoSize;
+	private final int stagingFifoDepth;
+	private final int internalFifoProgFullThreshold;
+	private final int superFifoWidth;
+	private final long superFifoDepth;
+	private final long superFifoMemoryBaseAddress;
+
+	private final DFEsmStateEnum<States> currentState;
+	private final DFEsmStateEnum<ReaderStates> readerState;
+	private final DFEsmPushInput writeInput;
+	private final DFEsmPullOutput readOutput;
+	private final DFEsmFifo internalFifo;
+	private final DFEsmFifo stagingFifo;
+	private final DFEsmStateValue internalFifoFull;
+	private final DFEsmStateValue outboundStagingRegister;
+	private final DFEsmStateValue writeInputReg;
+	private final DFEsmStateValue writeInputRegValid;
+	private final DFEsmStateValue stagingFifoFull;
+	private final DFEsmStateValue externalWritePointer;
+	private final DFEsmStateValue externalReadPointer;
+	private final DFEsmPushOutput externalWrite;
+	private final DFEsmPullInput externalRead;
+	private final DFEsmStateValue internalFifoInputReg;
+	private final DFEsmStateValue internalFifoInputRegValid;
+	private final DFEsmStateValue outboundStagingRegLoadEnable;
+	private final DFEsmStateValue outboundStagingRegisterValid;
+	private final DFEsmStateValue externalReadNow;
+	private final DFEsmStateValue externalReadNow_r;
+	private final DFEsmStateValue inboundStagingCounter;
+	private final DFEsmStateValue inboundStagingMuxNow;
+	private final DFEsmStateValue inboundStagingReg;
+	private final PipelinedMux pmux;
+	private final DFEsmStateValue latencyCounter;
+	private final DFEsmStateValue externalWriteStall;
+
+
+
+	private SuperFIFO(DFEManager owner, String name, int width, long depth, long memoryBaseAddress) {
+		super(owner);
+
+		superFifoName = name;
+		superFifoWidth = width;
+		superFifoDepth = depth;
+		superFifoMemoryBaseAddress = memoryBaseAddress;
+
+		burstSizeBits = owner.getManagerConfiguration().dram.getAdjustedBurstSizeInBytes() * 8;
+
+		if (burstSizeBits % superFifoWidth != 0) {
+			throw new MaxCompilerAPIError("Input width (%d bits) must fit an integer number of times in to a memory burst (%d bits), but %d / %d = %.4f\n",
+					superFifoWidth, burstSizeBits, burstSizeBits, superFifoWidth, (double)burstSizeBits / superFifoWidth);
+		}
+
+		if (burstSizeBits < superFifoWidth) {
+			throw new MaxCompilerAPIError("Slot size (%d) must be smaller or equal to a memory burst size (%d)\n",
+					superFifoWidth, burstSizeBits);
+		}
+
+		long memoryAvailableBits = (DDRFifo.memorySizeBits - burstSizeBits*superFifoMemoryBaseAddress);
+		if (superFifoWidth * superFifoDepth >  memoryAvailableBits) {
+			throw new MaxCompilerAPIError("Requested FIFO depth (%d) is too large. Max possible (given base address of %d) is %d\n",
+					superFifoDepth, superFifoMemoryBaseAddress, memoryAvailableBits / superFifoWidth);
+		}
+
+		wordWidth = superFifoWidth;
+		wordsPerBurst = burstSizeBits / superFifoWidth;
+
+		outboundStagingRegister = _State.value(state, dfeUInt(burstSizeBits), "outboundStagingRegister");
+		outboundStagingRegLoadEnable = _State.value(state, dfeUInt(wordsPerBurst), 0, "outboundStagingRegLoadEnable");
+		outboundStagingRegisterValid = _State.value(state, dfeBool(), false, "outboundStagingRegisterValid");
+
+		stagingFifoDepth = Math.max(MathUtils.nextPowerOfTwo(wordsPerBurst + 1), 512);
+		DFEsmFifoConfig stagingFifoConfig = new DFEsmFifoConfig();
+		stagingFifoConfig.setHasDataCount();
+		stagingFifoConfig.setProgrammableFull(stagingFifoDepth-32);
+		stagingFifoConfig.setIsFirstWordFallThrough();
+		stagingFifo = buffer.fifo(dfeUInt(superFifoWidth), stagingFifoDepth, stagingFifoConfig);
+		stagingFifoFull = _State.value(state, dfeBool(), true, "stagingFifoFull");
+
+
+		externalWrite = io.pushOutput(OUTPUT_EXTERNAL_WRITE, dfeUInt(burstSizeBits), 5);
+		externalRead = io.pullInput(INPUT_EXTERNAL_READ, dfeUInt(burstSizeBits), 5);
+		externalWriteStall = _State.value(state, dfeBool(), true, "externalWriteStall");
+
+		writeInput = io.pushInput(INPUT_FIFO, dfeUInt(superFifoWidth), 16);
+		readOutput = io.pullOutput(OUTPUT_FIFO, dfeUInt(superFifoWidth), 16);
+
+		writeInputReg = _State.value(state, dfeUInt(superFifoWidth), "writeInputReg");
+		writeInputRegValid = _State.value(state, dfeBool(), false, "writeInputRegValid");
+
+		externalWritePointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(superFifoDepth)), 0, "externalWritePointer");
+		externalReadPointer = _State.value(state, dfeUInt(1 + MathUtils.bitsToAddress(superFifoDepth)), 0, "externalReadPointer");
+		externalReadNow  = _State.value(state, dfeBool(), false, "externalReadNow");
+		externalReadNow_r = _State.value(state, dfeBool(), false, "externalReadNow_r");
+		inboundStagingReg  = _State.value(state, dfeUInt(burstSizeBits), "inboundStagingReg");
+		inboundStagingMuxNow  = _State.value(state, dfeBool(), false, "inboundStagingMuxNow");
+		inboundStagingCounter = _State.value(state, dfeUInt(MathUtils.bitsToAddress(wordsPerBurst)), 0, "inboundStagingCounter");
+
+
+		currentState = _State.enumerated(state, States.class, States.InternalFifo, "currentState");
+		readerState  = _State.enumerated(state, ReaderStates.class, ReaderStates.WaitForData, "readerStates");
+
+		maxInternalFifoSize = Math.max(512, MathUtils.nextPowerOfTwo(1 + Math.max(2*wordsPerBurst, 64)));
+		internalFifoProgFullThreshold = maxInternalFifoSize-Math.max(2*wordsPerBurst, 64);
+
+		DFEsmFifoConfig fifoConfig = new DFEsmFifoConfig();
+		fifoConfig.setBufferSpec(BufferSpec.UseBlockRam);
+		fifoConfig.setProgrammableEmpty(32);
+		fifoConfig.setHasDataCount();
+		fifoConfig.setProgrammableFull(internalFifoProgFullThreshold);
+
+		internalFifo = buffer.fifo(dfeUInt(superFifoWidth), maxInternalFifoSize, fifoConfig);
+		internalFifoFull  = _State.value(state, dfeBool(), false, "internalFifoFull");
+
+		internalFifoInputReg =  _State.value(state, dfeUInt(superFifoWidth), "internalFifoInputReg");
+		internalFifoInputRegValid =  _State.value(state, dfeBool(), false, "internalFifoInputRegValid");
+
+		pmux = new PipelinedMux(this, dfeUInt(superFifoWidth), 4, wordsPerBurst);
+		latencyCounter = _State.value(state, dfeUInt(MathUtils.bitsToAddress(pmux.getLatency())), 0, "latencyCounter");
+
+		logParams(owner);
+	}
+
+	private void logParams(DFEManager owner) {
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_wordsPerBurst", wordsPerBurst);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_wordWidth", wordWidth);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_burstSizeBits", burstSizeBits);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_maxInternalFifoSize", maxInternalFifoSize);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_stagingFifoDepth", stagingFifoDepth);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_internalFifoProgFullThreshold", internalFifoProgFullThreshold);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_fifoWidth", superFifoWidth);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_fifoDepth", (int) superFifoDepth);
+		owner.addMaxFileConstant("superFifo_" + superFifoName + "_fifoMemoryBaseAddress", (int) superFifoMemoryBaseAddress);
+	}
+
+	@Override
+	protected void nextState() {
+		stagingFifoFull.next <== stagingFifo.input.progFull;
+		writeInputRegValid.next <== writeInput.valid;
+		writeInputReg.next <== writeInput;
+		internalFifoFull.next <== internalFifo.input.progFull;
+
+
+		stagingFifo.input.writeEnable <== writeInputRegValid;
+		stagingFifo.input.dataIn <== writeInputReg;
+
+		internalFifo.input.dataIn <== internalFifoInputReg;
+		internalFifo.input.writeEnable <== internalFifoInputRegValid;
+
+
+		internalFifoInputReg.next <== stagingFifo.output.dataOut;
+		stagingFifo.output.readEnable <== false;
+		outboundStagingRegLoadEnable.next <== 0;
+		internalFifoInputRegValid.next <== false;
+		outboundStagingRegisterValid.next <== false;
+		externalWriteStall.next <== externalWrite.stall;
+
+		DFEsmValue externalFifoEmpty = externalWritePointer === externalReadPointer;
+
+		SWITCH (currentState) {
+			CASE (States.InternalFifo) {
+				IF (~internalFifoFull) {
+					IF (~stagingFifo.output.empty) {
+						internalFifoInputRegValid.next <== true;
+						stagingFifo.output.readEnable <== true;
+					}
+				} ELSE {
+					printf("Writer: InternalFifo -> ExternalFifo\n");
+					currentState.next <== States.ExternalFifo;
+				}
+			}
+
+			CASE (States.ExternalFifo) {
+				IF (~internalFifoFull & externalFifoEmpty) {
+					printf("Writer: ExternalFifo -> InternalFifo\n");
+					currentState.next <== States.InternalFifo;
+				} ELSE IF (stagingFifo.data_count >= wordsPerBurst) {
+					printf("Writer: ExternalFifo -> PushBurst\n");
+					outboundStagingRegLoadEnable.next <== 1;
+					currentState.next <== States.PushBurst;
+				}
+			}
+
+			CASE (States.PushBurst) {
+				IF (~externalWriteStall) {
+					stagingFifo.output.readEnable <== true;
+					IF (outboundStagingRegLoadEnable[wordsPerBurst-1] !== true) {
+						outboundStagingRegLoadEnable.next <== SMUtils.shiftLeft(this, outboundStagingRegLoadEnable, 1);
+					} ELSE {
+						printf("Writer: PushBurst -> ExternalFifo\n");
+						outboundStagingRegisterValid.next <== true;
+						currentState.next <== States.ExternalFifo;
+						externalWritePointer.next <== externalWritePointer + 1;
+					}
+				}
+			}
+		}
+
+
+		externalReadNow.next <== false;
+		externalReadNow_r.next <== externalReadNow;
+
+		inboundStagingMuxNow.next <== false;
+		SWITCH (readerState) {
+			CASE (ReaderStates.WaitForData) {
+				IF (~externalFifoEmpty & ~externalRead.empty) {
+					printf("Reader: WaitForData -> PullBurstPipe\n");
+					readerState.next <== ReaderStates.PullBurstPipe;
+					externalReadNow.next <== true;
+				}
+			}
+
+			CASE (ReaderStates.PullBurstPipe) {
+				IF (~internalFifoFull) {
+					printf("Reader: PullBurstPipe -> PullBurst\n");
+					readerState.next <== ReaderStates.PullBurst;
+				}
+			}
+
+			CASE (ReaderStates.PullBurst) {
+				printf("Reader: PullBurst -> FillInternalFifo\n");
+				readerState.next <== ReaderStates.FillInternalFifo;
+				inboundStagingCounter.next <== 0;
+				inboundStagingMuxNow.next <== true;
+			}
+
+			CASE (ReaderStates.FillInternalFifo) {
+				IF (inboundStagingCounter !== wordsPerBurst-1) {
+					inboundStagingCounter.next <== inboundStagingCounter + 1;
+					inboundStagingMuxNow.next <== true;
+				} ELSE {
+					printf("Reader: FillInternalFifo -> MuxLatency\n");
+					readerState.next <== ReaderStates.MuxLatency;
+					latencyCounter.next <== 0;
+				}
+			}
+
+			CASE (ReaderStates.MuxLatency) {
+				latencyCounter.next <== latencyCounter + 1;
+
+				IF (latencyCounter === pmux.getLatency() - 1) {
+					readerState.next <== ReaderStates.WaitForData;
+					externalReadPointer.next <== externalReadPointer + 1;
+					printf("Reader: MuxLatency -> WaitForData\n");
+				}
+			}
+		}
+
+		IF (externalReadNow_r) {
+			inboundStagingReg.next <== externalRead;
+		}
+
+		List<DFEsmValue> inputs = new ArrayList<DFEsmValue>();
+		for (int w = 0; w < wordsPerBurst; w++) {
+			IF (outboundStagingRegLoadEnable[w]) {
+				outboundStagingRegister.next[(w+1)*wordWidth-1:w*wordWidth] <== stagingFifo.output.dataOut;
+			}
+
+			inputs.add(inboundStagingReg[(w+1)*wordWidth-1:w*wordWidth]);
+		}
+
+		DFEsmValue muxOut = pmux.next(inboundStagingMuxNow, inboundStagingCounter, inputs);
+
+		IF (pmux.getValid()) {
+			internalFifoInputReg.next <== muxOut;
+			internalFifoInputRegValid.next <== true;
+		}
+
+		internalFifo.output.readEnable <== readOutput.read;
+	}
+
+	@Override
+	protected void outputFunction() {
+		writeInput.stall <== stagingFifoFull;
+		readOutput.almostEmpty <== internalFifo.output.progEmpty;
+		readOutput.empty <== internalFifo.output.empty;
+		readOutput <== internalFifo.output.dataOut;
+
+		externalWrite <== outboundStagingRegister;
+		externalWrite.valid <== outboundStagingRegisterValid;
+		externalRead.read <== externalReadNow;
+	}
+
+	void printf(String message, Object... args) {
+//		debug.printf(message, args);
+	}
+
+}

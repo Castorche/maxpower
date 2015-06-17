@@ -1,0 +1,40 @@
+package maxpower.lmem.superfifo;
+
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerStateMachine;
+
+public class SimpleWire extends ManagerStateMachine {
+
+	private final DFEsmPushInput src;
+	private final DFEsmPushOutput dst;
+
+	public static final String INPUT = "src";
+	public static final String OUTPUT = "dst";
+
+
+	public SimpleWire(DFEManager owner, int width) {
+		this(owner, width, 5);
+	}
+
+	public SimpleWire(DFEManager owner, int width, int stallLatency) {
+		super(owner);
+		src = io.pushInput(INPUT, dfeUInt(width), stallLatency);
+		dst = io.pushOutput(OUTPUT, dfeUInt(width), stallLatency);
+	}
+
+	@Override
+	protected void nextState() {
+		// TODO Auto-generated method stub
+
+	}
+
+	@Override
+	protected void outputFunction() {
+		dst <== src;
+		src.stall <== dst.stall;
+		dst.valid <== src.valid;
+	}
+
+}

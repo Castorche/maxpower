@@ -1,0 +1,164 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer.debug;
+
+import maxpower.network.tcp.manyconn.framer.TCPFramerConstants;
+import maxpower.network.tcp.manyconn.framer.TCPFramerSM;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes;
+import maxpower.network.tcp.manyconn.framer.TCPInterfaceTypes;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEStructType;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerIO;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.maxeleros.managerblocks.StructUtils;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class FramerDebugger extends StateMachineLib {
+
+	public DebugDataType debugDataType = new DebugDataType();
+	public static class DebugDataType extends DFEStructType {
+		public static final String FRAMER_STATE = "framerState";
+		public static final String ERROR_CODE = "errorCode";
+		public static final String LEVEL_REG = "levelReg";
+		public static final String BYTES_NEEDED_AFTER_HEADER = "bytesNeededAfterHeader";
+		public static final String DATA_SOURCE_SELECT = "dsSelect";
+		public static final String CYCLE = "cycle";
+		public static final String ERROR_NEED_SOF = "errorNeedSof";
+		public static final String TIMEOUT = "timeout";
+		public static final String RX_LAST_DATA = "rxLastData";
+		public static final String RX_ALL_REQ_DATA = "rxAllReqData";
+		public static final String SOF = "sof";
+		public static final String EOF = "eof";
+
+		public static final String PADDING1 = "padding1";
+		public static final String PADDING2 = "padding2";
+
+		public DebugDataType() {
+			super(
+					sft(CYCLE, DFETypeFactory.dfeUInt(64)),
+					sft(FRAMER_STATE, DFETypeFactory.dfeUInt(MathUtils.bitsToAddress(TCPFramerSM.FramerStates.values().length))),
+					sft(ERROR_CODE, DFETypeFactory.dfeUInt(MathUtils.bitsToAddress(TCPFramerConstants.FramerErrorCodes.values().length))),
+					sft(LEVEL_REG, DFETypeFactory.dfeInt(TCPFramerTypes.levelRegType.getTotalBits())),
+					sft(PADDING1, DFETypeFactory.dfeUInt(6)),
+					sft(BYTES_NEEDED_AFTER_HEADER, TCPInterfaceTypes.windowLevelBytesType),
+					sft(PADDING2, DFETypeFactory.dfeUInt(7)),
+					sft(DATA_SOURCE_SELECT, DFETypeFactory.dfeUInt(MathUtils.bitsToAddress(TCPFramerSM.DataSourceSelect.values().length))),
+					sft(ERROR_NEED_SOF, DFETypeFactory.dfeBool()),
+					sft(TIMEOUT, DFETypeFactory.dfeBool()),
+					sft(RX_LAST_DATA, DFETypeFactory.dfeBool()),
+					sft(RX_ALL_REQ_DATA, DFETypeFactory.dfeBool()),
+					sft(SOF, DFETypeFactory.dfeBool()),
+					sft(EOF, DFETypeFactory.dfeBool())
+			);
+		}
+	}
+
+	private final DFEsmStateValue debugReg;
+	private final DFEsmStateValue debugRegValid;
+	private final DFEsmStateValue debugRegStall;
+	private final DFEsmPushOutput debugOutput;
+
+	public FramerDebugger(StateMachineLib lib, ManagerIO io) {
+		super(lib);
+
+		debugReg = _State.value(state, dfeUInt(128), "debugReg");
+		debugRegValid = _State.value(state, dfeBool(), false, "debugRegValid");
+		debugRegStall = _State.value(state, dfeBool(), true, "debugRegStall");
+
+		if (TCPFramerConstants.enableFramerDebugger) {
+			debugOutput = io.pushOutput("debugOutput", dfeUInt(128), 64);
+		} else {
+			debugOutput = null;
+		}
+	}
+
+	public void setCycle(DFEsmValue cycle) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.CYCLE, cycle);
+	}
+
+	public void setFramerState(int stateOrdinal) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.FRAMER_STATE, stateOrdinal);
+	}
+
+	public void setErrorCode(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.ERROR_CODE, value);
+	}
+
+	public void setLevelReg(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.LEVEL_REG, value.cast(dfeUInt(debugDataType.getTypeForField(DebugDataType.LEVEL_REG).getTotalBits())));
+	}
+
+	public void setBytesNeededAfterHeader(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.BYTES_NEEDED_AFTER_HEADER, value);
+	}
+
+	public void setDataSourceSelect(int selectOrdinal) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.DATA_SOURCE_SELECT, selectOrdinal);
+	}
+
+	public void setErrorNeedSof(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.ERROR_NEED_SOF, value);
+	}
+
+	public void setTimeout(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.TIMEOUT, value);
+	}
+
+	public void setRxLastData(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.RX_LAST_DATA, value);
+	}
+
+	public void setRxAllReqData(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.RX_ALL_REQ_DATA, value);
+	}
+
+	public void setSof(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.SOF, value);
+	}
+
+	public void setEof(DFEsmValue value) {
+		SMUtils.assignField(debugReg.next, debugDataType, DebugDataType.EOF, value);
+	}
+
+	public void pushDebugWord() {
+		debugRegValid.next <== true;
+	}
+
+	public void next() {
+		if (TCPFramerConstants.enableFramerDebugger) {
+			debugRegStall.next <== debugOutput.stall;
+		} else {
+			debugRegStall.next <== false;
+		}
+
+		debugRegValid.next <== false;
+	}
+
+	public void output() {
+		if (TCPFramerConstants.enableFramerDebugger) {
+			debugOutput <== debugReg;
+			debugOutput.valid <== debugRegValid;
+		}
+	}
+
+	public DFEsmValue shouldStall() {
+		return debugRegStall;
+	}
+
+	public static void main(String [] args) {
+		StructUtils.printDFEStructType(new DebugDataType());
+	}
+
+}

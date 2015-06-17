@@ -1,0 +1,54 @@
+package maxpower.lmem.superfifo.test;
+
+import maxpower.lmem.superfifo.DDRFifo;
+import maxpower.lmem.superfifo.SimpleWire;
+
+import com.maxeler.maxcompiler.v2.build.EngineParameters;
+import com.maxeler.maxcompiler.v2.managers.DFEModel;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.StateMachineBlock;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.DebugLevel;
+import com.maxeler.maxcompiler.v2.managers.custom.stdlib.MemoryControlGroup;
+
+public class DDRFifoTest extends CustomManager {
+
+	public DDRFifoTest(boolean sim) {
+		super(new EngineParameters("DDRFifoTest_" + (sim ? "SIM" : "HW"), DFEModel.VECTIS,
+				sim ? com.maxeler.maxcompiler.v2.build.EngineParameters.Target.DFE_SIM :
+					com.maxeler.maxcompiler.v2.build.EngineParameters.Target.DFE));
+
+		debug.setDebugLevel(new DebugLevel().setHasStreamStatus(true));
+
+
+		StateMachineBlock wire = addStateMachine("cmdWire", new SimpleWire(this, 64));
+
+		getManagerConfiguration().dram.setEnableFlagCommands(true);
+
+		MemoryControlGroup ctrlGroup = addMemoryControlGroup("ctrlGroup", wire.getOutput(SimpleWire.OUTPUT));
+
+		DFELink writeMemStream = addStreamToOnCardMemory("writeMemStream", ctrlGroup);
+		DFELink readMemStream = addStreamFromOnCardMemory("readMemStream", ctrlGroup);
+		ctrlGroup.finalise();
+
+		StateMachineBlock ddrFifo = addStateMachine("ddrFifo", new DDRFifo(this, 1000000, 16 * 1024 * 1024,
+				ctrlGroup.getStreamIndexIdWithinGroup("writeMemStream"),
+				ctrlGroup.getStreamIndexIdWithinGroup("readMemStream"),
+				0, 1));
+
+		wire.getInput(SimpleWire.INPUT) <== ddrFifo.getOutput(DDRFifo.OUTPUT_MEM_COMMAND);
+
+		writeMemStream <== ddrFifo.getOutput(DDRFifo.OUTPUT_MEM_DATA);
+		ddrFifo.getInput(DDRFifo.INPUT_MEM_DATA) <== readMemStream;
+
+		ddrFifo.getInput(DDRFifo.INPUT_DATA) <== addStreamFromCPU("write_fifo");
+		addStreamToCPU("read_fifo") <== ddrFifo.getOutput(DDRFifo.OUTPUT_DATA);
+	}
+
+	public static void main(String [] args) {
+		boolean isSim = true;
+		DDRFifoTest m = new DDRFifoTest(isSim);
+		m.build();
+	}
+
+}
