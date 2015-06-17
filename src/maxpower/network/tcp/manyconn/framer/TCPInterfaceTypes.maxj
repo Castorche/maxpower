@@ -1,0 +1,48 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class TCPInterfaceTypes {
+
+	public static final int dataWordSizeBytes = 8;
+	public static final int maxWindowMemorySizeBytes = 64 * 1024;
+
+	public static final DFEType windowLevelBytesType = DFETypeFactory.dfeUInt(MathUtils.bitsToRepresent(maxWindowMemorySizeBytes));
+	public static final DFEType windowLevelWordsType = DFETypeFactory.dfeUInt(
+				MathUtils.bitsToRepresent(maxWindowMemorySizeBytes / dataWordSizeBytes));
+
+
+	public enum ConnectionStates {
+		Closed(0),
+		Listen(1),
+		SynSent(2),
+		SynRcvd(3),
+		Established(4),
+		CloseWait(5),
+		FinWait1(6),
+		Closing(7),
+		LastAck(8),
+		FinWait2(9),
+		TimeWait(10),
+		ClearTcp(11),
+		ClosedDataPending(13);
+
+
+		private final int value;
+		private ConnectionStates(int value) {
+			this.value = value;
+		}
+
+		public int getValue() { return value; }
+	}
+}

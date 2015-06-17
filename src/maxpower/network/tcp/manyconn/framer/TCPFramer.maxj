@@ -1,0 +1,108 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer;
+
+import java.util.List;
+
+import maxpower.network.tcp.manyconn.framer.proto.ProtoSpecFactory;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom.ManagerClock;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.StateMachineBlock;
+import com.maxeler.maxcompiler.v2.statemachine.manager._ManagerStateMachine;
+import com.maxeler.networking.statemachines.superfifo.SuperFIFO;
+import com.maxeler.networking.statemachines.superfifo.SuperFIFO.FifoIO;
+import com.maxeler.networking.v1.managers.NetworkManager;
+import com.maxeler.networking.v1.managers.netlib.NetworkConnection;
+import com.maxeler.networking.v1.managers.netlib.TCPStreamManyConnections;
+import com.maxeler.photon.hw.HWHierarchyMode;
+import com.maxeler.utils.MemoryManager;
+
+public class TCPFramer {
+	private static DFEType slotType = DFETypeFactory.dfeUInt(32);
+
+	public static DFELink create(
+			NetworkManager owner,
+			String name,
+			NetworkConnection conn,
+			TCPStreamManyConnections tcpManyConn,
+			DFELink stateEventStream, long fifoDepth,
+			MemoryManager lmemOrganizer,
+			List<ProtoSpecFactory> specFactories)
+	{
+		return
+			create(
+				owner,
+				name,
+				conn,
+				stateEventStream,
+				tcpManyConn,
+				fifoDepth,
+				lmemOrganizer,
+				specFactories);
+	}
+
+	public static DFELink create(
+			NetworkManager owner,
+			String name,
+			NetworkConnection conn,
+			DFELink stateEventStream,
+			TCPStreamManyConnections tcpManyConn,
+			long fifoDepth,
+			MemoryManager lmemOrganizer,
+			List<ProtoSpecFactory> specFactories) {
+
+		ManagerClock clk = owner.getNetworkClock(conn);
+		owner.pushDefaultClock(clk);
+
+		TCPFramerSM framerSM = new TCPFramerSM(owner, tcpManyConn.getTypes(), specFactories);
+		_ManagerStateMachine.Configuration.setHWHierarchy(framerSM, HWHierarchyMode.SOFT);
+		StateMachineBlock framer = owner.addStateMachine("tcpFramer_" + name, framerSM);
+
+		framer.getInput(TCPFramerSM.INPUT_RX_DATA_EVENTS) <== tcpManyConn.getReceiveEventStream();
+		framer.getInput(TCPFramerSM.INPUT_RX_CONN_STATE_EVENTS) <== stateEventStream;
+
+		if (hasSuperFifo(fifoDepth)) {
+			FifoIO superFifo = SuperFIFO.create(owner, name, slotType, fifoDepth, lmemOrganizer);
+			superFifo.write <== framer.getOutput(TCPFramerSM.OUTPUT_RX_EVENTS);
+			framer.getInput(TCPFramerSM.INPUT_RX_EVENTS) <== superFifo.read;
+		} else {
+			framer.getInput(TCPFramerSM.INPUT_RX_EVENTS) <== framer.getOutput(TCPFramerSM.OUTPUT_RX_EVENTS);
+		}
+		framer.getInput(TCPFramerSM.INPUT_RX_RESPONSE).connect(tcpManyConn.getReceiveDataStream());
+
+		if (TCPFramerConstants.enableDebugStreams) {
+			owner.addStreamToCPU("debugStream") <== framer.getOutput("debugStream");
+		}
+
+		if (TCPFramerConstants.enableFramerDebugger) {
+			owner.addStreamToCPU("framerDebug") <== framer.getOutput("debugOutput");
+		}
+
+		tcpManyConn.getReceiveRequestStream() <== framer.getOutput(TCPFramerSM.OUTPUT_RX_REQUEST);
+
+		DFELink output = framer.getOutput(TCPFramerSM.OUTPUT_FRAMED);
+		owner.popDefaultClock();
+		return output;
+	}
+
+	public static boolean hasSuperFifo(long fifoDepth) {
+		return fifoDepth > 128 * 1024;
+	}
+
+	public static long getMemoryUsageBursts(DFEManager manager, long fifoDepth) {
+		if (hasSuperFifo(fifoDepth))
+			return SuperFIFO.getMemoryUsageBursts(manager, fifoDepth, slotType);
+		else
+			return 0;
+	}
+}

@@ -1,0 +1,207 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer.debug;
+
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.managers.custom.CustomManager;
+import com.maxeler.maxcompiler.v2.managers.custom.DFELink;
+import com.maxeler.maxcompiler.v2.managers.custom._CustomManagers;
+import com.maxeler.maxcompiler.v2.managers.custom.blocks.StateMachineBlock;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmOutput;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerStateMachine;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.maxeleros.StreamingInterfaceTypePull;
+import com.maxeler.maxeleros.StreamingInterfaceTypePush;
+import com.maxeler.maxeleros.managercompiler.core.Stream;
+import com.maxeler.maxeleros.managercompiler.core.WrapperNode.IODesc;
+import com.maxeler.networking.v1.framed_kernels.FramedLinkType;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class FrameProbe extends ManagerStateMachine {
+	public static final String INPUT = "src";
+	public static final String OUTPUT = "dst";
+
+	private final boolean isPull;
+	private final DFEsmPullInput pullInput;
+	private final DFEsmPushInput pushInput;
+	private final DFEsmPullOutput pullOutput;
+	private final DFEsmPushOutput pushOutput;
+	private final DFEsmStateValue sofCount;
+	private final DFEsmStateValue eofCount;
+	private final DFEsmStateValue byteCount;
+	private final DFEsmStateValue valid_r;
+	private final DFEsmStateValue sof_r;
+	private final DFEsmStateValue eof_r;
+	private final DFEsmStateValue mod_r;
+	private final DFEsmStateValue lastFrameSizeBytes;
+	private final FramedLinkType linkType;
+	private final DFEsmOutput scalar_eofCount;
+	private final DFEsmOutput scalar_sofCount;
+	private final DFEsmOutput scalar_byteCount;
+	private final DFEsmOutput scalar_lastFrameSizeBytes;
+	private final DFEsmStateValue framingErrorSofWhileInFrame;
+	private final DFEsmStateValue framingErrorEofWhileNotInFrame;
+	private final DFEsmStateValue inFrame;
+	private final DFEsmOutput scalar_framingErrorSofWhileInFrame;
+	private final DFEsmOutput scalar_framingErrorEofWhileNotInFrame;
+	private final DFEsmStateValue read_r;
+
+	public static DFELink probe(CustomManager owner, DFELink src, FramedLinkType linkType) {
+		FrameProbe fp = new FrameProbe(owner, src, linkType);
+		StateMachineBlock fpb = owner.addStateMachine("frameProbe_" + _CustomManagers.streamToImp(src).getName(), fp);
+
+		fpb.getInput(INPUT) <== src;
+		return fpb.getOutput(OUTPUT);
+	}
+
+	public FrameProbe(DFEManager owner, DFELink src, FramedLinkType type) {
+		super(owner);
+
+		this.linkType = type;
+		Stream imp = _CustomManagers.streamToImp(src);
+		IODesc desc = imp.getSource();
+		isPull = desc.getStreamingInterfaceType() instanceof StreamingInterfaceTypePull;
+
+		if (isPull) {
+			StreamingInterfaceTypePull pullIf = (StreamingInterfaceTypePull) desc.getStreamingInterfaceType();
+			pullInput = io.pullInput(INPUT, dfeUInt(linkType.getDFEStructType().getTotalBits()), pullIf.getAlmostEmptyLatency());
+			pushInput = null;
+
+			pullOutput = io.pullOutput(OUTPUT, dfeUInt(linkType.getDFEStructType().getTotalBits()), pullIf.getAlmostEmptyLatency());
+			pushOutput = null;
+		} else {
+			StreamingInterfaceTypePush pushIf = (StreamingInterfaceTypePush) desc.getStreamingInterfaceType();
+			pushInput = io.pushInput(INPUT, dfeUInt(linkType.getDFEStructType().getTotalBits()), pushIf.getStallLatency());
+			pullInput = null;
+
+			pushOutput = io.pushOutput(OUTPUT, dfeUInt(linkType.getDFEStructType().getTotalBits()), pushIf.getStallLatency());
+			pullOutput = null;
+		}
+
+		sofCount = _State.value(state, dfeUInt(64), 0, "sofCount");
+		eofCount = _State.value(state, dfeUInt(64), 0, "eofCount");
+		byteCount = _State.value(state, dfeUInt(64), 0, "byteCount");
+		lastFrameSizeBytes = _State.value(state, dfeUInt(32), 0, "byteCount");
+
+		inFrame = _State.value(state, dfeBool(), false, "inFrame");
+		framingErrorSofWhileInFrame = _State.value(state, dfeBool(), false, "framingErrorSofWhileInFrame");
+		framingErrorEofWhileNotInFrame = _State.value(state, dfeBool(), false, "framingErrorEofWhileNotInFrame");
+
+		scalar_framingErrorSofWhileInFrame = io.scalarOutput("framingErrorSofWhileInFrame", dfeBool());
+		scalar_framingErrorEofWhileNotInFrame = io.scalarOutput("framingErrorEofWhileNotInFram", dfeBool());
+
+
+		read_r = _State.value(state, dfeBool(), false, "read_r");
+		valid_r = _State.value(state, dfeBool(), false, "valid_r");
+		sof_r = _State.value(state, dfeBool(), "sof_r");
+		eof_r = _State.value(state, dfeBool(), "eof_r");
+		mod_r = _State.value(state, dfeUInt(3), "mod_r");
+
+		scalar_eofCount = io.scalarOutput("eofCount", dfeUInt(64));
+		scalar_sofCount = io.scalarOutput("sofCount", dfeUInt(64));
+		scalar_byteCount = io.scalarOutput("byteCount", dfeUInt(64));
+		scalar_lastFrameSizeBytes = io.scalarOutput("lastFrameSizeBytes", dfeUInt(32));
+	}
+
+	@Override
+	protected void nextState() {
+		if (isPull) {
+			read_r.next <== pullOutput.read;
+			valid_r.next <== read_r;
+			sof_r.next <== SMUtils.extractField(pullInput, linkType.getDFEStructType(), linkType.getSOF());
+			eof_r.next <== SMUtils.extractField(pullInput, linkType.getDFEStructType(), linkType.getEOF());
+			if (linkType.getMod() != null)
+				mod_r.next <== SMUtils.extractField(pullInput, linkType.getDFEStructType(), linkType.getMod());
+			else
+				mod_r.next <== 0;
+		} else {
+			valid_r.next <== pushInput.valid;
+			sof_r.next <== SMUtils.extractField(pushInput, linkType.getDFEStructType(), linkType.getSOF());
+			eof_r.next <== SMUtils.extractField(pushInput, linkType.getDFEStructType(), linkType.getEOF());
+			if (linkType.getMod() != null)
+				mod_r.next <== SMUtils.extractField(pushInput, linkType.getDFEStructType(), linkType.getMod());
+			else
+				mod_r.next <== 0;
+		}
+
+		int dataSizeBytes = linkType.getDFEStructType().getTypeForField(linkType.getData()).getTotalBits() / 8;
+
+		IF (valid_r) {
+			IF (inFrame) {
+				IF (sof_r) {
+					framingErrorSofWhileInFrame.next <== true;
+				}
+
+				IF (eof_r) {
+					inFrame.next <== false;
+				}
+			} ELSE {
+				IF (sof_r !== eof_r) {
+					IF (eof_r) {
+						framingErrorEofWhileNotInFrame.next <== true;
+					} ELSE IF (sof_r) {
+						inFrame.next <== true;
+					}
+				}
+			}
+			IF (sof_r) {
+				sofCount.next <== sofCount + 1;
+			}
+
+			IF (eof_r) {
+				eofCount.next <== eofCount + 1;
+			}
+
+			DFEsmAssignableValue contribBytes = assignable.value(dfeUInt(MathUtils.bitsToRepresent(dataSizeBytes)));
+
+			IF (eof_r & mod_r !== 0) {
+				contribBytes <== mod_r.cast(contribBytes.getType());
+			} ELSE {
+				contribBytes <== constant.value(contribBytes.getType(), dataSizeBytes);
+			}
+
+			byteCount.next <== byteCount + contribBytes.cast(byteCount.getType());
+
+			IF (sof_r) {
+				lastFrameSizeBytes.next <== contribBytes.cast(lastFrameSizeBytes.getType());
+			} ELSE {
+				lastFrameSizeBytes.next <== lastFrameSizeBytes + contribBytes.cast(lastFrameSizeBytes.getType());
+			}
+		}
+	}
+
+	@Override
+	protected void outputFunction() {
+		if (isPull) {
+			pullOutput <== pullInput;
+			pullOutput.almostEmpty <== pullInput.almostEmpty;
+			pullOutput.empty <== pullInput.empty;
+			pullInput.read <== pullOutput.read;
+		} else {
+			pushOutput <== pushInput;
+			pushOutput.valid <== pushInput.valid;
+			pushInput.stall <== pushOutput.stall;
+		}
+
+		scalar_eofCount <== eofCount;
+		scalar_sofCount <== sofCount;
+		scalar_byteCount <== byteCount;
+		scalar_lastFrameSizeBytes <== lastFrameSizeBytes;
+		scalar_framingErrorEofWhileNotInFrame <== framingErrorEofWhileNotInFrame;
+		scalar_framingErrorSofWhileInFrame <== framingErrorSofWhileInFrame;
+	}
+
+}

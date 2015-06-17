@@ -1,0 +1,1320 @@
+/*********************************************************************
+ * TCP Framer                                                        *
+ * Copyright (C) 2013-2015 Maxeler Technologies                      *
+ *                                                                   *
+ * Author:  Itay Greenspon                                           *
+ *                                                                   *
+ *********************************************************************/
+
+package maxpower.network.tcp.manyconn.framer;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import maxpower.network.tcp.manyconn.framer.ByteLevelShift.ShiftDirection;
+import maxpower.network.tcp.manyconn.framer.TCPFramerConstants.FramerErrorCodes;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes.ConnectionRecordType;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes.DebugStructType;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes.EventStruct;
+import maxpower.network.tcp.manyconn.framer.TCPFramerTypes.TCPFramerLinkType;
+import maxpower.network.tcp.manyconn.framer.TCPInterfaceTypes.ConnectionStates;
+import maxpower.network.tcp.manyconn.framer.debug.FramerDebugger;
+import maxpower.network.tcp.manyconn.framer.proto.FramerProtocolSpec;
+import maxpower.network.tcp.manyconn.framer.proto.ProtoSpecFactory;
+
+import com.maxeler.maxcompiler.v2.errors.MaxCompilerAPIError;
+import com.maxeler.maxcompiler.v2.managers.DFEManager;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmAssignableValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmInput;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmOutput;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmSinglePortMappedROM;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmSinglePortRAM;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateEnum;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmStateValue;
+import com.maxeler.maxcompiler.v2.statemachine.DFEsmValue;
+import com.maxeler.maxcompiler.v2.statemachine.Latency;
+import com.maxeler.maxcompiler.v2.statemachine.StateMachineLib;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPullOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushInput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.DFEsmPushOutput;
+import com.maxeler.maxcompiler.v2.statemachine.manager.ManagerStateMachine;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.BufferSpec;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Buffer.DFEsmFifoConfig;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.Mem.SinglePortRAMMode;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib._State;
+import com.maxeler.maxcompiler.v2.statemachine.stdlib.buffer.DFEsmFifo;
+import com.maxeler.maxcompiler.v2.statemachine.types.DFEsmValueType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+import com.maxeler.networking.types.TCPManyConnectionsTypes;
+import com.maxeler.networking.types.TCPManyConnectionsTypes.ConnStateEventType;
+import com.maxeler.networking.types.TCPManyConnectionsTypes.EventType;
+import com.maxeler.networking.types.TCPManyConnectionsTypes.RxDataRespType;
+import com.maxeler.networking.types.TCPManyConnectionsTypes.RxRequestType;
+import com.maxeler.statemachine.utils.SMUtils;
+
+public class TCPFramerSM extends ManagerStateMachine implements SMPrinting {
+	public static final String INPUT_RX_EVENTS = "rxEventsInput";
+	public static final String OUTPUT_RX_EVENTS = "rxEventsOutput";
+
+	public static final String INPUT_RX_DATA_EVENTS = "rxDataEvents";
+	public static final String INPUT_RX_CONN_STATE_EVENTS = "rxConnStateEvents";
+	public static final String INPUT_RX_RESPONSE = "rxResponse";
+
+	public static final String OUTPUT_RX_REQUEST = "rxRequest";
+	public static final String OUTPUT_FRAMED = "framed";
+
+	private final DebugStructType debugStructType = new DebugStructType();
+	private final ConnectionRecordType connectionRecordType;
+	private final EventStruct eventStruct;
+	private final TCPFramerLinkType fixFramerLinkType;
+	private final DFEsmValueType headerSizeBytesType;
+	private int minHeaderSizeBytes = 0;
+	private final int maxHeaderSizeBytes;
+
+	public static enum FramerStates {
+		Reset, 					// 0
+		ClearConnectionRecordsStart, // 1
+		ClearConnectionRecords, // 2
+		WaitEvent,              // 3
+		ReadEventPipe,          // 4
+		EventPipe,              // 5
+ 		EvalEvent,              // 6
+		ConnectionRecordPipe,   // 7
+		EvalConnection,         // 8
+		MessageDrainPipe,		// 9
+		HeaderFlush,            // 10
+		ProcessHeader,          // 11
+		PipeMessageLengthDecode, // 12
+		MessageLengthDecoded,   // 13
+		HeaderEval,             // 14
+
+		ProcessPayload,         // 15
+		PreEvaluate,            // 16
+
+		EvalConnEvent,          // 17
+
+		ErrorDrain,				// 18
+		PreErrorDrain,			// 19
+
+		CommitBack              // 20
+	}
+
+	public static enum DataSourceSelect {
+		HeaderWord0,
+		HeaderWord1,
+		HeaderWord2
+	}
+
+
+	private final DFEsmPullInput rxEvents;
+	private final DFEsmPushOutput rxRequest;
+	private final DFEsmPushInput rxDataInput;
+
+	private final DFEsmStateEnum<FramerStates> currentState;
+	private final DFEsmStateValue eventReady;
+
+	private final DFEsmSinglePortRAM connectionRecords;
+	private final DFEsmStateValue connectionRecordWriteBack;
+	private final DFEsmStateValue connectionRecordWriteBackEnable;
+	private final DFEsmStateValue bytesNeeded;
+	private final DFEsmStateValue requestedBytesCounter;
+
+	private final DFEsmStateValue requestCmd;
+	private final DFEsmStateValue requestCmdValid;
+	private final DFEsmStateValue rxDataReg;
+	private final DFEsmStateValue rxDataRegValid;
+
+	private final DFEsmStateValue headerStagingRegister;
+	private final DFEsmStateValue headerStagingPosition;
+	private final DFEsmStateValue rxBytesCounter;
+	private final DFEsmStateValue lengthSanityGood;
+	private final DFEsmStateValue headerSigGood;
+	private final DFEsmStateValue levelReg;
+	private final DFEsmStateValue totalMessageLength;
+	private final DFEsmStateValue payloadPosition;
+	private final DFEsmPullOutput output;
+	private final DFEsmStateValue outputReg;
+	private final DFEsmStateValue outputRegValid;
+
+	private final DFEsmStateEnum<DataSourceSelect> dataSourceSelect;
+	private final ByteLevelShift rightShift;
+	private final DFEsmStateValue recordAddress;
+	private final DFEsmStateValue recordAddressLast;
+	private final DFEsmStateValue recordAddressFirst;
+	private final DFEsmStateValue eventSize;
+	private final DFEsmStateValue headerSeen;
+	private final DFEsmStateValue headerSize;
+	private final DFEsmStateValue header;
+	private final DFEsmStateValue bytesNeededAfterHeader;
+	private final DFEsmStateValue leftoverBytes;
+	private final DFEsmStateValue lastRxPos;
+	private final DFEsmStateValue nextRxMod;
+	private final DFEsmStateValue rightShiftAmount;
+	private final DFEsmStateValue errorCode;
+
+	private final DFEsmOutput scalar_currentState;
+	private final DFEsmStateValue errorNeedSof;
+	private final DFEsmPushInput rxConnStateEvents;
+	private final DFEsmValue rxConnStateEvents_valid;
+	private final DFEsmPushInput rxDataEvents;
+	private final DFEsmPushOutput rxEventsOutput;
+	private final DFEsmStateValue connectionState;
+
+	private final DFEsmStateValue isConnectionEvent;
+	private final DFEsmStateValue rxDataTimeout;
+	private final DFEsmStateValue rxEventsReg;
+	private final DFEsmValueType timeoutType;
+	private final DFEsmInput scalar_timeoutThreshold;
+
+	private final DFEsmStateValue countTimeouts;
+	private final DFEsmStateValue timeoutThreshold;
+	private final DFEsmStateValue frameCounter;
+	private final DFEsmStateValue cycleCounter;
+	private final CoalescingBuffer coalescingBuffer;
+	private final TCPManyConnectionsTypes tcpRawType;
+	private final DFEsmFifo outputBuffer;
+	private final DFEsmStateValue stalling;
+	private final DFEsmInput scalar_maxMessageSize;
+	private final DFEsmStateValue maxMessageSize;
+
+	private final DFEsmStateValue outputBufferEmpty;
+	private final DFEsmStateValue rxSimulatneousEvent_r;
+
+	private final DFEsmStateValue countSimultaneousEvent_r;
+	private final DFEsmStateValue rxConnStateEvent_r;
+	private final DFEsmPushOutput debugStream;
+	private final DFEsmStateValue debugReg;
+	private final DFEsmStateValue debugRegValid;
+	private final DFEsmStateValue rxDebugEventRegValid;
+	private final DFEsmStateValue rxSimulatneousEvent_rr;
+	private final DFEsmStateValue seenConsecutiveSimultaneousEvents_r;
+	private final DFEsmSinglePortMappedROM protocolSelectTable;
+	private final DFEsmStateValue connectionAddress;
+	private final DFEsmStateValue protocolSelect;
+	private final List<FramerProtocolSpec> protoSpecs;
+
+	private DFEsmOutput scalar_seenConsecutiveSimultaneousEvents;
+	private DFEsmOutput scalar_countSimultaneousEvents;
+	private DFEsmOutput scalar_outputBufferEmpty;
+	private DFEsmOutput scalar_bytesNeeded;
+	private DFEsmOutput scalar_rxBytesCounter;
+	private DFEsmOutput scalar_recordAddress;
+	private DFEsmOutput scalar_levelReg;
+	private DFEsmOutput scalar_totalMessageStringLength;
+	private DFEsmOutput scalar_lengthGood;
+	private DFEsmOutput scalar_headerSigGood;
+	private DFEsmOutput scalar_stalling;
+	private final DFEsmOutput scalar_countTimeouts;
+	private final DFEsmStateValue isPrevErrors;
+	private final DFEsmStateValue receivedEnoughHeaderData;
+	private final DFEsmStateValue decodedMessageLength;
+	private final FramerDebugger debugger;
+	private final DFEsmStateValue isPassThrough;
+	private final DFEsmSinglePortMappedROM passThroughTable;
+
+	private void addMaxfileConstants(DFEManager owner) {
+		owner.addMaxFileConstant("framer_minHeaderSizeBytes", minHeaderSizeBytes);
+		owner.addMaxFileConstant("framer_maxHeaderSizeBytes", maxHeaderSizeBytes);
+	}
+
+	public TCPFramerSM(DFEManager owner, TCPManyConnectionsTypes _tcpRawType, List<ProtoSpecFactory> protoSpecFactories) {
+		super(owner);
+		if (protoSpecFactories.size() < 1) {
+			throw new MaxCompilerAPIError("Framer needs at least 1 protocol specification.");
+		}
+
+		debugger = new FramerDebugger(this, io);
+		protoSpecs = new ArrayList<FramerProtocolSpec>(protoSpecFactories.size());
+		for (ProtoSpecFactory psf : protoSpecFactories) {
+			FramerProtocolSpec protoSpec = psf.create(this);
+			protoSpecs.add(protoSpec);
+			minHeaderSizeBytes = Math.max(minHeaderSizeBytes, protoSpec.getMinimumHeaderSizeBytes());
+		}
+
+		maxHeaderSizeBytes = MathUtils.nextMultiple(minHeaderSizeBytes, TCPInterfaceTypes.dataWordSizeBytes);
+
+		headerSizeBytesType = dfeUInt(MathUtils.bitsToRepresent(maxHeaderSizeBytes));
+
+		connectionRecordType = new ConnectionRecordType(maxHeaderSizeBytes);
+
+		tcpRawType=_tcpRawType;
+		fixFramerLinkType = new TCPFramerLinkType(_tcpRawType);
+		eventStruct = new EventStruct(tcpRawType);
+
+		addMaxfileConstants(owner);
+		TCPFramerConstants.addMaxfileConstants(owner, protoSpecs);
+
+
+		rxConnStateEvents = io.pushInput(INPUT_RX_CONN_STATE_EVENTS, dfeUInt(tcpRawType.getConnStateEventType().getTotalBits()), 16);
+		rxDataEvents = io.pushInput(INPUT_RX_DATA_EVENTS, dfeUInt(tcpRawType.getEventType().getTotalBits()), 16);
+		tcpRawType.getConnStateEventType();
+		rxConnStateEvents_valid = rxConnStateEvents.valid & SMUtils.extractField(rxConnStateEvents, tcpRawType.getConnStateEventType(), ConnStateEventType.STATE_CHANGE);
+
+		rxConnStateEvent_r = _State.value(state, dfeUInt(tcpRawType.getConnStateEventType().getTotalBits()), "rxConnStateEvent_r");
+		rxSimulatneousEvent_r = _State.value(state, dfeBool(), false, "rxSimulatneousEvent_r");
+		rxSimulatneousEvent_rr = _State.value(state, dfeBool(), false, "rxSimulatneousEvent_rr");
+		countSimultaneousEvent_r = _State.value(state, dfeUInt(32), 0, "countSimultaneousEvent_r");
+		seenConsecutiveSimultaneousEvents_r = _State.value(state, dfeBool(), false, "seenConsecutiveSimultaneousEvents_r");
+
+		rxEventsOutput = io.pushOutput(OUTPUT_RX_EVENTS, dfeUInt(eventStruct.getTotalBits()), 16);
+		rxEvents = io.pullInput(INPUT_RX_EVENTS, dfeUInt(eventStruct.getTotalBits()));
+		if (TCPFramerConstants.enableDebugStreams) {
+			debugStream = io.pushOutput("debugStream", dfeUInt(128), 64);
+			debugReg = _State.value(state, dfeUInt(debugStructType.getTotalBits()), "debugReg");
+			debugRegValid = _State.value(state, dfeBool(), "debugRegValid");
+
+			rxDebugEventRegValid = _State.value(state, dfeBool(), "rxDebugEventRegValid");
+		} else {
+			debugStream = null;
+			debugReg = null;
+			debugRegValid = null;
+			rxDebugEventRegValid = null;
+		}
+
+
+
+		rxRequest = io.pushOutput(OUTPUT_RX_REQUEST, dfeUInt(tcpRawType.getRxRequestType().getTotalBits()), 4);
+		rxDataInput = io.pushInput(INPUT_RX_RESPONSE, dfeUInt(tcpRawType.getRxDataRespType().getTotalBits()), 64);
+
+		output = io.pullOutput(OUTPUT_FRAMED, dfeUInt(fixFramerLinkType.getTotalBits()), TCPFramerConstants.outputEmptyLatency);
+
+		currentState = _State.enumerated(state, FramerStates.class, FramerStates.Reset, "currentState");
+
+
+		eventReady = _State.value(state, dfeBool(), false, "eventReady");
+
+		rxDataReg = _State.value(state, dfeUInt(tcpRawType.getRxDataRespType().getTotalBits()), "rxDataReg");
+		rxDataRegValid = _State.value(state, dfeBool(), false, "rxDataRegValid");
+		lastRxPos = _State.value(state, dfeUInt(3), 0, "lastRxPos");
+		nextRxMod = _State.value(state, dfeUInt(4), 8, "nextRxMod");
+
+		if (protoSpecs.size() > 1) {
+			protocolSelectTable = mem.romMapped("protocolSelect",
+					dfeUInt(MathUtils.bitsToAddress(protoSpecs.size())),
+					tcpRawType.getMaxNumConnections(), Latency.ONE_CYCLE);
+			protocolSelect = _State.value(state,
+					dfeUInt(MathUtils.bitsToAddress(protoSpecs.size())),
+					0, "protocolSelect");
+		} else {
+			protocolSelectTable = null;
+			protocolSelect = null;
+		}
+
+		passThroughTable = mem.romMapped("passThrough",
+				dfeBool(),
+				tcpRawType.getMaxNumConnections(),
+				Latency.ONE_CYCLE);
+		isPassThrough = _State.value(state,
+				dfeBool(),
+				0, "isPassThrough");
+
+
+		connectionRecords = mem.ram(dfeUInt(connectionRecordType.getTotalBits()),
+				tcpRawType.getMaxNumConnections(), SinglePortRAMMode.WRITE_FIRST,
+				Latency.ONE_CYCLE);
+
+		connectionRecordWriteBack = _State.value(state, dfeUInt(connectionRecordType.getTotalBits()), "connectionRecordWriteBack");
+		connectionRecordWriteBackEnable  = _State.value(state, dfeBool(), "connectionRecordWriteBack");
+		//wordsNeeded = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelWordsType.getTotalBits()), "wordsNeeded");
+		bytesNeeded = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), "bytesNeeded");
+		requestedBytesCounter = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), "bytesCounter");
+		//rxWordsCounter = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelWordsType.getTotalBits()), "rxWordsCounter");
+		rxBytesCounter = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), "rxBytesCounter");
+
+		/*
+		 * Request Interface
+		 */
+		requestCmd = _State.value(state, dfeUInt(tcpRawType.getRxRequestType().getTotalBits()), "requestCmd");
+		requestCmdValid = _State.value(state, dfeBool(), false, "requestCmdValid");
+
+
+		headerStagingRegister = _State.value(state, dfeUInt(SMUtils.B(maxHeaderSizeBytes)), "headerStagingRegister");
+		headerStagingPosition = _State.value(state, dfeUInt(MathUtils.bitsToRepresent(maxHeaderSizeBytes)), "headerStagingPosition");
+		payloadPosition = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), "payloadPosition");
+		leftoverBytes = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), "leftoverBytes");
+		rightShiftAmount = _State.value(state, dfeUInt(TCPFramerConstants.modWidth), "rightShiftAmount");
+		receivedEnoughHeaderData = _State.value(state, dfeBool(), "receivedEnoughHeaderData");
+
+		lengthSanityGood = _State.value(state, dfeBool(), false, "lengthGood");
+		headerSigGood = _State.value(state, dfeBool(), false, "headerSigGood");
+
+
+		levelReg = _State.value(state, TCPFramerTypes.levelRegType, 0, "levelReg");
+
+		decodedMessageLength = _State.value(state, TCPFramerTypes.lengthType, "decodedMessageLength");
+		totalMessageLength = _State.value(state, dfeUInt(TCPInterfaceTypes.windowLevelBytesType.getTotalBits()), 0, "totalMessageStringLength");
+
+		outputReg = _State.value(state, dfeUInt(fixFramerLinkType.getTotalBits()), "outputReg");
+		outputRegValid = _State.value(state, dfeBool(), false, "outputRegValid");
+
+		dataSourceSelect = _State.enumerated(state, DataSourceSelect.class, "dataSourceSelect");
+
+		rightShift = new ByteLevelShift(this, "shifter", ShiftDirection.Right, TCPInterfaceTypes.dataWordSizeBytes);
+		connectionAddress = _State.value(state, dfeUInt(MathUtils.bitsToAddress(tcpRawType.getMaxNumConnections())), 0, "connectionAddress");
+
+		recordAddress = _State.value(state, dfeUInt(MathUtils.bitsToAddress(tcpRawType.getMaxNumConnections())), 0, "recordAddress");
+		recordAddressLast = _State.value(state,
+				dfeUInt(MathUtils.bitsToAddress(tcpRawType.getMaxNumConnections())),
+				tcpRawType.getMaxNumConnections() - 1, "recordAddressLast");
+		recordAddressFirst = _State.value(state,
+				dfeUInt(MathUtils.bitsToAddress(tcpRawType.getMaxNumConnections())), 0, "recordAddressFirst");
+
+		eventSize = _State.value(state,
+				dfeUInt(tcpRawType.getEventType().getTypeForField(EventType.SIZE).getTotalBits()),
+				"eventSize");
+
+		headerSeen =  _State.value(state, dfeBool(), false, "headerSeen");
+		headerSize = _State.value(state, dfeUInt(connectionRecordType.getTypeForField(TCPFramerTypes.ConnectionRecordType.HEADER_SIZE).getTotalBits()), "headerSize");
+		header = _State.value(state, dfeUInt(connectionRecordType.getTypeForField(TCPFramerTypes.ConnectionRecordType.HEADER).getTotalBits()), "header");
+		bytesNeededAfterHeader = _State.value(state, dfeUInt(connectionRecordType.getTypeForField(TCPFramerTypes.ConnectionRecordType.BYTES_NEEDED_AFTER_HEADER).getTotalBits()), "bytesNeededAfterHeader");
+
+		errorCode = _State.value(state, dfeUInt(fixFramerLinkType.getTypeForField(TCPFramerLinkType.ERROR_CODE).getTotalBits()),
+				FramerErrorCodes.NoError.ordinal(), "errorCode");
+		errorNeedSof = _State.value(state, dfeBool(), false, "errorNeedSof");
+		isPrevErrors = _State.value(state, dfeBool(), false, "isPrevErrors");
+
+		isConnectionEvent = _State.value(state, dfeBool(), "isConnectionEvent");
+		connectionState = _State.value(state, dfeUInt(MathUtils.bitsToAddress(ConnectionStates.values().length)), "connectionState");
+
+
+		if (owner.isTargetSimulation())
+			timeoutType = dfeUInt(MathUtils.bitsToAddress(1024*1024*1024));
+		else
+			timeoutType = dfeUInt(16);
+
+		rxDataTimeout = _State.value(state, timeoutType, 0, "rxDataTimeout");
+
+		rxEventsReg = _State.value(state,  dfeUInt(eventStruct.getTotalBits()), "rxEventsReg");
+		countTimeouts = _State.value(state, dfeUInt(32), 0, "countTimeouts");
+		timeoutThreshold = _State.value(state, timeoutType, 1024, "timeoutThreshold");
+		maxMessageSize = _State.value(state, TCPFramerTypes.maxMessageLengthType, "maxMessageSize");
+
+		scalar_timeoutThreshold = io.scalarInput("timeoutThreshold", timeoutType);
+		scalar_countTimeouts = io.scalarOutput("countTimeouts", dfeUInt(32));
+		scalar_maxMessageSize = io.scalarInput("maxMessageSize", TCPFramerTypes.maxMessageLengthType);
+
+
+		coalescingBuffer = new CoalescingBuffer(this, fixFramerLinkType);
+
+		scalar_currentState = io.scalarOutput("currentState", dfeUInt(MathUtils.bitsToAddress(FramerStates.values().length)));
+		if (TCPFramerConstants.enableDebug) {
+			scalar_bytesNeeded = io.scalarOutput("bytesNeeded", bytesNeeded.getType());
+			scalar_rxBytesCounter = io.scalarOutput("rxBytesCounter", rxBytesCounter.getType());
+			scalar_recordAddress = io.scalarOutput("recordAddress", recordAddress.getType());
+			scalar_levelReg = io.scalarOutput("levelReg", dfeUInt(levelReg.getType().getTotalBits()));
+//			scalar_levelReg = io.scalarOutput("levelReg", levelReg.getType());
+			scalar_totalMessageStringLength = io.scalarOutput("totalMessageStringLength", totalMessageLength.getType());
+			scalar_lengthGood = io.scalarOutput("lengthGood", lengthSanityGood.getType());
+			scalar_headerSigGood = io.scalarOutput("headerSigGood", headerSigGood.getType());
+			scalar_stalling = io.scalarOutput("stalling", dfeBool());
+			scalar_outputBufferEmpty = io.scalarOutput("outputBufferEmpty", dfeBool());
+			scalar_countSimultaneousEvents = io.scalarOutput("countSimultaneousEvents", dfeUInt(32));
+			scalar_seenConsecutiveSimultaneousEvents = io.scalarOutput("seenConsecutiveSimultaneousEvents", dfeBool());
+		}
+
+		outputBufferEmpty = _State.value(state, dfeBool(), "outputBufferEmpty");
+
+
+		cycleCounter = _State.value(state, dfeUInt(64), 0, "cycleCounter");
+		frameCounter = _State.value(state, dfeUInt(64), 0, "frameCounter");
+
+		DFEsmFifoConfig outputBufferConfig = new DFEsmFifoConfig();
+		outputBufferConfig.setProgrammableFull(TCPFramerConstants.outputBufferProgrammableFull);
+		outputBufferConfig.setProgrammableEmpty(TCPFramerConstants.outputEmptyLatency);
+		outputBufferConfig.setBufferSpec(BufferSpec.UseBlockRam);
+		outputBufferConfig.setHasDataCount();
+		outputBuffer = buffer.fifo(dfeUInt(fixFramerLinkType.getTotalBits()), TCPFramerConstants.outputBufferDepth, outputBufferConfig);
+		stalling = _State.value(state, dfeBool(), true, "stalling");
+	}
+
+	@Override
+	protected void nextState() {
+		debugger.next();
+		coalescingBuffer.nextState(outputReg, outputRegValid);
+		cycleCounter.next <== cycleCounter + 1;
+		outputRegValid.next <== false;
+		eventReady.next <== false;
+		connectionRecordWriteBackEnable.next <== false;
+
+		dataSourceSelect.next <== DataSourceSelect.HeaderWord0;
+		debugger.setDataSourceSelect(DataSourceSelect.HeaderWord0.ordinal());
+
+		rxEventsReg.next <== rxEvents;
+		debugger.setCycle(cycleCounter);
+		debugger.setErrorCode(errorCode);
+		debugger.setLevelReg(levelReg);
+		debugger.setBytesNeededAfterHeader(bytesNeededAfterHeader);
+		debugger.setErrorNeedSof(errorNeedSof);
+
+		SMUtils.assignField(requestCmd.next, tcpRawType.getRxRequestType(), RxRequestType.READ, true);
+		SMUtils.assignField(requestCmd.next, tcpRawType.getRxRequestType(), RxRequestType.DISCARD, true);
+
+		if (TCPFramerConstants.enableDebugStreams) {
+			rxDebugEventRegValid.next <== false;
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.EV_DATA,
+					SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.DATA).cast(dfeUInt(16)));
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.EV_IS_CONN_EVENT,
+					SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.IS_CONN_EVENT));
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.EV_SOCKET_ID,
+					SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.SOCKET_ID).cast(dfeUInt(16)));
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.EV_VALID, rxDebugEventRegValid);
+
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.RQ_SIZE,
+					SMUtils.extractField(requestCmd, tcpRawType.getRxRequestType(), RxRequestType.SIZE).cast(dfeUInt(16)));
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.RQ_SOCKET_ID,
+					SMUtils.extractField(requestCmd, tcpRawType.getRxRequestType(), RxRequestType.SOCKET).cast(dfeUInt(16)));
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.RQ_VALID, requestCmdValid);
+			SMUtils.assignField(debugReg.next, debugStructType, DebugStructType.PADDING, 0);
+			debugRegValid.next <== rxDebugEventRegValid | requestCmdValid;
+		}
+
+		rxDataReg.next <== rxDataInput;
+		rxDataRegValid.next <== rxDataInput.valid;
+
+		outputBufferEmpty.next <== outputBuffer.output.empty;
+
+		connectionRecords.address <== recordAddress;
+		connectionRecords.dataIn <== connectionRecordWriteBack;
+		connectionRecords.writeEnable <== connectionRecordWriteBackEnable;
+
+		rxConnStateEvent_r.next <== rxConnStateEvents;
+		rxSimulatneousEvent_r.next <== rxConnStateEvents_valid & rxDataEvents.valid;
+		rxSimulatneousEvent_rr.next <== rxSimulatneousEvent_r;
+		IF (rxSimulatneousEvent_r) {
+			countSimultaneousEvent_r.next <== countSimultaneousEvent_r + 1;
+			IF (rxSimulatneousEvent_rr) {
+				seenConsecutiveSimultaneousEvents_r.next <== true;
+			}
+		}
+
+		DFEsmValue rLevel = SMUtils.extractField(connectionRecords.dataOut,      connectionRecordType, ConnectionRecordType.LEVEL);
+		DFEsmValue rHeaderSeen = SMUtils.extractField(connectionRecords.dataOut, connectionRecordType, ConnectionRecordType.HEADER_SEEN);
+		DFEsmValue rHeaderSize = SMUtils.extractField(connectionRecords.dataOut, connectionRecordType, ConnectionRecordType.HEADER_SIZE);
+		DFEsmValue rHeader = SMUtils.extractField(connectionRecords.dataOut,     connectionRecordType, ConnectionRecordType.HEADER);
+		DFEsmValue rBytesNeededAfterHeader = SMUtils.extractField(connectionRecords.dataOut, connectionRecordType, ConnectionRecordType.BYTES_NEEDED_AFTER_HEADER);
+		DFEsmValue rLastRxPos = SMUtils.extractField(connectionRecords.dataOut, connectionRecordType, ConnectionRecordType.LAST_RX_POS);
+		DFEsmValue rConnError = SMUtils.extractField(connectionRecords.dataOut, connectionRecordType, ConnectionRecordType.CONNECTION_ERROR);
+
+		if (protoSpecs.size() > 1) {
+			protocolSelectTable.address <== connectionAddress;
+			DFEsmValue rProtocolSelect = protocolSelectTable.dataOut;
+			protocolSelect.next <== rProtocolSelect;
+			SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.PROTOCOL_ID, rProtocolSelect);
+		}
+
+		passThroughTable.address <== connectionAddress;
+		DFEsmValue rIsPassThrough = passThroughTable.dataOut;
+
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.IS_PASS_THROUGH, isPassThrough);
+
+		DFEsmValue rxMod = SMUtils.extractField(rxDataReg,  tcpRawType.getRxDataRespType(), RxDataRespType.MOD);
+		DFEsmValue rxData = SMUtils.extractField(rxDataReg, tcpRawType.getRxDataRespType(), RxDataRespType.DATA);
+
+		IF (rxDataRegValid) {
+			lastRxPos.next <== lastRxPos + rxMod;
+			int width = MathUtils.bitsToRepresent(8);
+			nextRxMod.next <== (constant.value(dfeUInt(width), 8) - (lastRxPos + rxMod).cast(dfeUInt(width)));
+		}
+
+		DFEsmAssignableValue responseSize = assignable.value(dfeUInt(4));
+		responseSize <== rxMod.cast(dfeUInt(4));
+		IF (rxMod === 0) responseSize <== constant.value(dfeUInt(4), 8);
+
+
+		/*
+		 * Header Decoding
+		 */
+
+		for (FramerProtocolSpec pSpec : protoSpecs) {
+			if (protoSpecs.size() > 1) _IF (protocolSelect === protoSpecs.indexOf(pSpec));
+			{
+				headerSigGood.next <== pSpec.verifySignature(headerStagingRegister);
+				lengthSanityGood.next <== pSpec.validateLength(headerStagingRegister);
+				decodedMessageLength.next <== pSpec.decodeMessageLength(headerStagingRegister).cast(decodedMessageLength.getType());
+			}
+			if (protoSpecs.size() > 1) _END_IF();
+		}
+
+		shiftAndLatch(rxDataRegValid, rxData, headerStagingRegister, headerStagingPosition);
+
+		DFEsmValue responseShifted = rightShift.nextSingleCycle(rxData, rightShiftAmount);
+
+
+		/*
+		 * Default outputReg assignments
+		 */
+
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOF, false);
+		debugger.setSof(constant.value(false));
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.EOF, false);
+		debugger.setEof(constant.value(false));
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, 0);
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.ERROR_CODE, errorCode);
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONNECTION_STATE_VALID, false);
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONTAINS_DATA, false);
+		SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.LEVEL, levelReg.cast(dfeUInt(18)));
+
+		for (FramerStates s : FramerStates.values()) {
+			IF (currentState === s) {
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CURRENT_STATE, s.ordinal());
+			}
+		}
+
+
+		DFEsmValue receivedAllRequestedData = rxBytesCounter === bytesNeeded;
+		DFEsmValue receivingLastData = rxBytesCounter + responseSize.cast(rxBytesCounter.getType()) === bytesNeeded;
+		DFEsmAssignableValue timeout = assignable.value(dfeBool());
+		timeout <== false;
+		IF (timeoutThreshold > 0)
+			timeout <== rxDataTimeout === timeoutThreshold;
+
+		debugger.setTimeout(timeout);
+		debugger.setRxLastData(receivingLastData);
+		debugger.setRxAllReqData(receivedAllRequestedData);
+		if (TCPFramerConstants.enableDebugStreams) {
+			stalling.next <== outputBuffer.input.progFull | debugStream.stall | debugger.shouldStall();
+		} else {
+			stalling.next <== outputBuffer.input.progFull | debugger.shouldStall();
+		}
+
+		outputBuffer.input.writeEnable <== coalescingBuffer.getOutputDataValid();
+		outputBuffer.input.dataIn <== coalescingBuffer.getOutputData();
+		outputBuffer.output.readEnable <== output.read;
+
+		requestCmdValid.next <== false;
+
+		SWITCH (currentState) {
+			CASE (FramerStates.Reset) {
+				timeoutThreshold.next <== scalar_timeoutThreshold;
+				currentState.next <== FramerStates.ClearConnectionRecordsStart;
+				recordAddressFirst.next <== 0;
+				recordAddressLast.next <== tcpRawType.getMaxNumConnections() - 1;
+				IF (scalar_maxMessageSize === 0)
+					maxMessageSize.next <== TCPFramerConstants.maxSupportedMessageLength - 1;
+				ELSE
+					maxMessageSize.next <== scalar_maxMessageSize;
+
+				printf("recordAddressLast = %d, maxMessageSize = %d\n", recordAddressLast.next, maxMessageSize.next);
+			}
+
+			CASE (FramerStates.ClearConnectionRecordsStart) {
+				recordAddress.next <== recordAddressFirst;
+				connectionRecordWriteBack.next <== 0;
+				connectionRecordWriteBackEnable.next <== true;
+				printf("Clearing address: %d\n", recordAddress.next);
+
+				IF (recordAddressFirst === recordAddressLast) {
+					currentState.next <== FramerStates.WaitEvent;
+				} ELSE {
+					currentState.next <== FramerStates.ClearConnectionRecords;
+				}
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.ClearConnectionRecords) {
+				recordAddress.next <== recordAddress + 1;
+				connectionRecordWriteBack.next <== 0;
+
+				IF (recordAddress === recordAddressLast) {
+					currentState.next <== FramerStates.WaitEvent;
+					printf("currentState: %s -> %s\n", currentState, currentState.next);
+				} ELSE {
+					connectionRecordWriteBackEnable.next <== true;
+					printf("Clearing address: %d\n", recordAddress.next);
+				}
+			}
+
+			CASE (FramerStates.WaitEvent) {
+				IF (~rxEvents.empty) {
+					currentState.next <== FramerStates.ReadEventPipe;
+					printf("currentState: %s -> %s\n", currentState, currentState.next);
+				}
+			}
+
+			CASE (FramerStates.ReadEventPipe) {
+				IF (~stalling) {
+					if (TCPFramerConstants.enableDebugStreams) rxDebugEventRegValid.next <== true;
+					currentState.next <== FramerStates.EventPipe;
+					printf("currentState: %s -> %s\n", currentState, currentState.next);
+				}
+			}
+
+			CASE (FramerStates.EventPipe) {
+				// eventInfo latching in
+				DFEsmValue socketID = SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.SOCKET_ID);
+				DFEsmValue isConnEvent = SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.IS_CONN_EVENT);
+
+				eventSize.next <== SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.DATA).cast(eventSize.getType());
+				connectionState.next <== SMUtils.extractField(rxEventsReg, eventStruct, EventStruct.DATA).cast(connectionState.getType());
+				isConnectionEvent.next <== isConnEvent;
+
+				connectionAddress.next <== socketID;
+				recordAddress.next <== socketID;
+				SMUtils.assignField(requestCmd.next, tcpRawType.getRxRequestType(), RxRequestType.SOCKET, socketID);
+				currentState.next <== FramerStates.EvalEvent;
+
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOCKET, socketID);
+
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.EvalEvent) {
+				// eventInfo valid, input to connection record address ram is ready
+				printf("Reading from address: %d\n", recordAddress);
+				currentState.next <== FramerStates.ConnectionRecordPipe;
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.ConnectionRecordPipe) {
+				// Load defaults
+				connectionRecordWriteBack.next <== connectionRecords.dataOut;
+				levelReg.next <== rLevel.cast(levelReg.getType()) + eventSize.cast(levelReg.getType());
+				header.next <== rHeader;
+				headerSeen.next <== rHeaderSeen;
+				headerSize.next <== rHeaderSize;
+				headerStagingPosition.next <== rHeaderSize;
+				headerStagingRegister.next <== rHeader;
+				bytesNeededAfterHeader.next <== rBytesNeededAfterHeader;
+				lastRxPos.next <== rLastRxPos;
+				rxDataTimeout.next <== 0;
+				isPassThrough.next <== rIsPassThrough;
+
+				int width = MathUtils.bitsToRepresent(8);
+				nextRxMod.next <== constant.value(dfeUInt(width), 8) - rLastRxPos.cast(dfeUInt(width));
+
+				isPrevErrors.next <== rConnError;
+				errorNeedSof.next <== false;
+
+				IF (isConnectionEvent) {
+					levelReg.next <== rLevel.cast(levelReg.getType());
+					currentState.next <== FramerStates.EvalConnEvent;
+				} ELSE {
+					IF (rConnError | rIsPassThrough) {
+						currentState.next <== FramerStates.PreErrorDrain;
+					} ELSE {
+						currentState.next <== FramerStates.EvalConnection;
+					}
+				}
+
+				// Output of connection record ram is ready, registering now
+				printf("ConnectionRecordPipe: isConnectionEvent = %d (state = %d), rConnError = %d, errorCode.next = %d, rIsPassThrough = %d\n", isConnectionEvent, connectionState, rConnError, errorCode.next, rIsPassThrough);
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.EvalConnection) {
+				errorCode.next <== FramerErrorCodes.NoError.ordinal();
+				requestedBytesCounter.next <== 0;
+				currentState.next <== FramerStates.CommitBack;
+				rxBytesCounter.next <== 0;
+				payloadPosition.next <== 0;
+
+				printf("EvalConnection: HeaderSeen = %d, HeaderSize = %d, BytesNeededAfterHeader=%d, levelReg = %d\n",
+						headerSeen, headerSize, bytesNeededAfterHeader, levelReg);
+
+				// connectionRecord is valid
+				IF (headerSeen) {
+					bytesNeeded.next <== bytesNeededAfterHeader;
+
+					IF (bytesNeededAfterHeader.cast(levelReg.getType()) <= levelReg) {
+						currentState.next <== FramerStates.HeaderFlush;
+					}
+				} ELSE {
+					DFEsmValue neededBytes = constant.value(dfeUInt(headerSizeBytesType.getTotalBits()), minHeaderSizeBytes) - headerSize;
+					bytesNeeded.next <== neededBytes.cast(bytesNeeded.getType()); //getWordsNeeded(neededBytes).cast(bytesNeeded.getType()) << modWidth;
+
+					IF (neededBytes.cast(levelReg.getType()) <= levelReg) {
+						currentState.next <== FramerStates.ProcessHeader;
+					}
+				}
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.ProcessHeader) {
+				doRequest();
+
+				IF (rxDataRegValid) {
+					levelReg.next <== levelReg - responseSize.cast(levelReg.getType());
+					headerStagingPosition.next <== headerStagingPosition + responseSize.cast(headerStagingPosition.getType());
+					rxBytesCounter.next <== rxBytesCounter + responseSize.cast(rxBytesCounter.getType());
+					printf("ProcessHeader: [ mod = %d ], rxBytesCounter = %d, headerStagingPosition = %d, " +
+							"headerStagingPosition.next = %d -- ", responseSize, rxBytesCounter, headerStagingPosition, headerStagingPosition.next);
+					printString(rxDataReg);
+				}
+
+				IF (receivedAllRequestedData) {
+					currentState.next <== FramerStates.PipeMessageLengthDecode;
+				}
+			}
+
+			CASE (FramerStates.PipeMessageLengthDecode) {
+				currentState.next <== FramerStates.MessageLengthDecoded;
+				receivedEnoughHeaderData.next <== headerStagingPosition >= minHeaderSizeBytes;
+			}
+
+			CASE (FramerStates.MessageLengthDecoded) {
+				totalMessageLength.next <== decodedMessageLength;
+				DFEsmValue messageLengthGood = decodedMessageLength <= maxMessageSize.cast(TCPFramerTypes.lengthType);
+
+				IF (receivedEnoughHeaderData) {
+					IF (headerSigGood & lengthSanityGood & messageLengthGood) {
+						currentState.next <== FramerStates.HeaderEval;
+					} ELSE {
+						/*
+						 * Error: Drain a part of the message - mark as corrupt.
+						 */
+						printf("Error! headerSigGood: %d, lengthSanityGood: %d, messageLengthGood: %d\n", headerSigGood, lengthSanityGood, messageLengthGood);
+						IF (~messageLengthGood)
+							errorCode.next <== FramerErrorCodes.BodyLengthTooBig.ordinal();
+						ELSE
+							errorCode.next <== FramerErrorCodes.HeaderCorrupt.ordinal();
+						currentState.next <== FramerStates.MessageDrainPipe;
+					}
+				} ELSE {
+					/*
+					 * Not enough bytes in header:
+					 *  - Write back position & Header
+					 * 	- Return to Idle, wait for next event.
+					 */
+					currentState.next <== FramerStates.CommitBack;
+				}
+
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.MessageDrainPipe) {
+				headerSize.next <== headerStagingPosition;
+				header.next <== headerStagingRegister;
+
+				IF (headerStagingPosition !== 0) {
+					errorNeedSof.next <== false;
+					currentState.next <== FramerStates.HeaderFlush;
+				} ELSE {
+					errorNeedSof.next <== true;
+					currentState.next <== FramerStates.PreErrorDrain;
+				}
+			}
+
+			CASE (FramerStates.HeaderEval) {
+				DFEsmValue calcBytesNeededAfterHeader = totalMessageLength - headerStagingPosition.cast(totalMessageLength.getType());
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType, ConnectionRecordType.HEADER_SEEN, true);
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType,
+						ConnectionRecordType.BYTES_NEEDED_AFTER_HEADER, calcBytesNeededAfterHeader);
+
+
+				printf("HeaderEval: calcBytesNeededAfterHeader = %d\n",
+						calcBytesNeededAfterHeader);
+
+				bytesNeededAfterHeader.next <== calcBytesNeededAfterHeader;
+				headerSize.next <== headerStagingPosition;
+				header.next <== headerStagingRegister;
+				headerSeen.next <== true;
+				currentState.next <== FramerStates.CommitBack;
+
+				IF (calcBytesNeededAfterHeader === 0) {
+					/*
+					 * Message contained entirely in header
+					 */
+					currentState.next <== FramerStates.EvalConnection;
+				} ELSE {
+					/*
+					 * Need to fetch payload
+					 */
+					IF (levelReg >= calcBytesNeededAfterHeader.cast(levelReg.getType())) {
+						currentState.next <== FramerStates.EvalConnection;
+					}
+				}
+
+				printf("dataHandlerState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.HeaderFlush) {
+				IF (errorCode === FramerErrorCodes.NoError.ordinal()) doRequest(); // Mask some request latency...
+				debugger.setFramerState(FramerStates.HeaderFlush.ordinal());
+				outputRegValid.next <== true;
+				debugger.pushDebugWord();
+				printf("HeaderFlush: Pushing output %s\n", dataSourceSelect);
+
+				DFEsmValue headerMod = headerSize.slice(0, 3);
+				errorNeedSof.next <== false;
+				DFEsmAssignableValue sof = assignable.value(dfeBool());
+				sof <== false;
+				DFEsmAssignableValue eof = assignable.value(dfeBool());
+				eof <== false;
+
+				_SWITCH (dataSourceSelect); {
+					_CASE (DataSourceSelect.HeaderWord0); {
+						debugger.setDataSourceSelect(DataSourceSelect.HeaderWord0.ordinal());
+						SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA,
+								SMUtils.extractBytes(header, 7, 0));
+						sof <== true;
+						SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONTAINS_DATA, true);
+
+						frameCounter.next <== frameCounter + 1;
+
+						IF (headerSize <= 8) {
+							SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, headerMod);
+							eof <== bytesNeededAfterHeader === 0;
+							IF (errorCode !== FramerErrorCodes.NoError.ordinal()) {
+								currentState.next <== FramerStates.PreErrorDrain;
+								eof <== levelReg <= 0;
+							} ELSE {
+								currentState.next <== FramerStates.ProcessPayload;
+							}
+						} ELSE {
+							dataSourceSelect.next <== DataSourceSelect.HeaderWord1;
+						}
+					}
+
+					if (maxHeaderSizeBytes > 8) {
+						_CASE (DataSourceSelect.HeaderWord1); {
+							debugger.setDataSourceSelect(DataSourceSelect.HeaderWord1.ordinal());
+							SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA,
+									SMUtils.extractBytes(header, 15, 8));
+							IF (headerSize <= 16) {
+								SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, headerMod);
+								eof <== bytesNeededAfterHeader === 0;
+								IF (errorCode !== FramerErrorCodes.NoError.ordinal()) {
+									currentState.next <== FramerStates.PreErrorDrain;
+									eof <== levelReg <= 0;
+								} ELSE {
+									currentState.next <== FramerStates.ProcessPayload;
+								}
+							} ELSE {
+								dataSourceSelect.next <== DataSourceSelect.HeaderWord2;
+							}
+						}
+					}
+
+					if (maxHeaderSizeBytes > 16) {
+						_CASE (DataSourceSelect.HeaderWord2); {
+							debugger.setDataSourceSelect(DataSourceSelect.HeaderWord2.ordinal());
+							SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA,
+									SMUtils.extractBytes(header, 23, 16));
+
+							SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, headerMod);
+							eof <== bytesNeededAfterHeader === 0;
+
+							IF (errorCode !== FramerErrorCodes.NoError.ordinal()) {
+								currentState.next <== FramerStates.PreErrorDrain;
+								eof <== levelReg <= 0;
+							} ELSE {
+								currentState.next <== FramerStates.ProcessPayload;
+							}
+						}
+					}
+
+					if (maxHeaderSizeBytes > 24) throw new MaxCompilerAPIError("Framer supports headrs up to 24 bytes.\n");
+				} _END_SWITCH();
+
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOF, sof);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.EOF, eof);
+				debugger.setSof(sof);
+				debugger.setEof(eof);
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.ProcessPayload) {
+				doRequest();
+
+				printf("receivedAllRequestedData = %d, receivingLastData = %d, rxBytesCounter = %d, bytesNeeded = %d\n", receivedAllRequestedData, receivingLastData, rxBytesCounter, bytesNeeded);
+
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, rxMod);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA, rxData);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(),
+						TCPFramerLinkType.EOF, timeout | receivingLastData);
+
+				debugger.setEof(timeout | receivingLastData);
+				debugger.setFramerState(FramerStates.ProcessPayload.ordinal());
+				IF (timeout) {
+					countTimeouts.next <== countTimeouts + 1;
+					SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(),
+							TCPFramerLinkType.ERROR_CODE, FramerErrorCodes.PayloadCutShort.ordinal());
+					outputRegValid.next <== true;
+					debugger.pushDebugWord();
+				}
+
+				IF (rxDataRegValid) {
+					levelReg.next <== levelReg - responseSize.cast(levelReg.getType());
+					payloadPosition.next <== payloadPosition + responseSize.cast(payloadPosition.getType());
+					rxBytesCounter.next <== rxBytesCounter + responseSize.cast(rxBytesCounter.getType());
+
+					IF (payloadPosition < bytesNeededAfterHeader) {
+						outputRegValid.next <== true;
+						debugger.pushDebugWord();
+						printf("ProcessPayload: Pushing output %d of %d bytes, lastCycle=%d, rxBytesCounter=%d, bytesNeeded=%d, responseMod=%d\n", payloadPosition.next, bytesNeededAfterHeader, receivingLastData, rxBytesCounter, bytesNeeded, responseSize);
+					}
+
+					IF (receivingLastData) { // Last Cycle!
+						DFEsmValue mod = (bytesNeededAfterHeader - payloadPosition).slice(0, 3);
+						// Last word
+						SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, mod);
+					}
+				}
+
+				DFEsmValue receivedEnoughPayloadData = payloadPosition >= bytesNeededAfterHeader;
+
+				DFEsmValue leftOver = payloadPosition - bytesNeededAfterHeader;
+				leftoverBytes.next <== leftOver;
+				rightShiftAmount.next <== (constant.value(dfeUInt(4), 8) - leftOver.cast(dfeUInt(4))).slice(0, TCPFramerConstants.modWidth);
+
+				/*
+				 * True 1 cycle after getting the last data word!
+				 */
+				IF (receivedAllRequestedData | timeout) {
+					IF (timeout) {
+						printf("ERROR: Timeout in ProcessPayload (timeoutThreshold = %d).\n", timeoutThreshold);
+						errorCode.next <== FramerErrorCodes.PayloadCutShort.ordinal();
+					} ELSE IF (~receivedEnoughPayloadData) {
+						/*
+						 * Bug? wordsNeeded is wrong.
+						 */
+						printf("ERROR: Bug? wordsNeeded is wrong\n");
+
+						errorCode.next <== FramerErrorCodes.PayloadError.ordinal();
+					}
+
+
+					currentState.next <== FramerStates.PreEvaluate;
+					printf("currentState: %s -> %s\n", currentState, currentState.next);
+				}
+			}
+
+			CASE (FramerStates.EvalConnEvent) {
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONNECTION_STATE_VALID, true);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONNECTION_STATE, connectionState);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOF, true);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.EOF, true);
+				debugger.setSof(constant.value(true));
+				debugger.setEof(constant.value(true));
+				debugger.setFramerState(FramerStates.EvalConnEvent.ordinal());
+
+				outputRegValid.next <== true;
+				debugger.pushDebugWord();
+
+				recordAddressFirst.next <== recordAddress;
+				recordAddressLast.next <== recordAddress;
+
+				DFEsmValue isClosed = connectionState === ConnectionStates.Closed.getValue();
+				DFEsmValue isClosedDataPending = connectionState === ConnectionStates.ClosedDataPending.getValue();
+				DFEsmValue isCloseWait = connectionState === ConnectionStates.CloseWait.getValue();
+
+				IF (isClosedDataPending | isCloseWait) {
+					errorCode.next <== FramerErrorCodes.ShutdownDrain.ordinal();
+					currentState.next <== FramerStates.MessageDrainPipe;
+				} ELSE IF (isClosed) {
+					SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.ERROR_CODE,
+							FramerErrorCodes.NoError.ordinal());
+					errorCode.next <== FramerErrorCodes.NoError.ordinal();
+					currentState.next <== FramerStates.ClearConnectionRecordsStart;
+				} ELSE {
+					currentState.next <== FramerStates.WaitEvent;
+				}
+
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.PreErrorDrain) {
+				rightShiftAmount.next <== 0;
+				leftoverBytes.next <== 0;
+				requestedBytesCounter.next <== 0;
+				rxBytesCounter.next <== 0;
+				IF (~isPassThrough & levelReg >= maxMessageSize.cast(levelReg.getType())) {
+					bytesNeeded.next <== maxMessageSize.cast(bytesNeeded.getType());
+				} ELSE {
+					IF (levelReg > 0) {
+						bytesNeeded.next <== levelReg.cast(bytesNeeded.getType());
+					} ELSE {
+						bytesNeeded.next <== 0;
+					}
+				}
+
+				IF (isPrevErrors) {
+					errorCode.next <== FramerErrorCodes.PreviousErrors.ordinal();
+					errorNeedSof.next <== true;
+				} ELSE IF (isPassThrough) {
+					errorNeedSof.next <== true;
+				}
+
+
+				currentState.next <== FramerStates.ErrorDrain;
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.ErrorDrain) {
+				doRequest();
+
+				headerStagingPosition.next <== 0;
+				headerStagingRegister.next <== 0;
+
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD, rxMod);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA, rxData);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.EOF, timeout | (receivingLastData));
+				debugger.setEof(timeout | (receivingLastData));
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOF, errorNeedSof);
+				debugger.setSof(errorNeedSof);
+				SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONTAINS_DATA, levelReg > 0);
+				debugger.setFramerState(FramerStates.ErrorDrain.ordinal());
+
+				IF (timeout) {
+					countTimeouts.next <== countTimeouts + 1;
+					SMUtils.assignField(outputReg.next, fixFramerLinkType.getDFEStructType(),
+							TCPFramerLinkType.ERROR_CODE, FramerErrorCodes.PayloadCutShort.ordinal());
+					outputRegValid.next <== true;
+					debugger.pushDebugWord();
+				}
+
+				IF (rxDataRegValid) {
+					errorNeedSof.next <== false;
+					levelReg.next <== levelReg - responseSize.cast(levelReg.getType());
+//					payloadPosition.next <== payloadPosition + responseMod.cast(payloadPosition.getType());
+					rxBytesCounter.next <== rxBytesCounter + responseSize.cast(rxBytesCounter.getType());
+
+					outputRegValid.next <== true;
+					debugger.pushDebugWord();
+					printf("ErrorDrain: Pushing output (level = %d)\n", levelReg);
+				}
+
+				IF (receivedAllRequestedData | timeout) {
+					currentState.next <== FramerStates.CommitBack;
+					IF (receivedAllRequestedData) {
+						IF (levelReg > 0) // Data remaining
+							currentState.next <== FramerStates.MessageDrainPipe;
+					}
+
+					printf("currentState: %s -> %s\n", currentState, currentState.next);
+				}
+			}
+
+			CASE (FramerStates.PreEvaluate) {
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType, ConnectionRecordType.HEADER_SEEN, false);
+				DFEsmValue newHeaderSize = leftoverBytes.cast(dfeUInt(headerSizeBytesType.getTotalBits()));
+				DFEsmValue newHeader = pad(responseShifted, SMUtils.B(maxHeaderSizeBytes));
+				DFEsmValue neededBytes = constant.value(dfeUInt(headerSizeBytesType.getTotalBits()), minHeaderSizeBytes) - newHeaderSize;
+
+				printf("PreEvaluate: newHeaderSize = %d, responseMod = %d, neededBytes = %d, levelReg = %d\n",
+						newHeaderSize, responseSize, neededBytes, levelReg);
+
+				header.next <== newHeader;
+				headerSeen.next <== false;
+				headerSize.next <== newHeaderSize;
+				headerStagingPosition.next <== newHeaderSize;
+				headerStagingRegister.next <== newHeader;
+				bytesNeededAfterHeader.next <== 0;
+
+
+				IF (errorCode === FramerErrorCodes.NoError.ordinal() &
+						neededBytes.cast(levelReg.getType()) <= levelReg) {
+					currentState.next <== FramerStates.EvalConnection;
+				} ELSE {
+					currentState.next <== FramerStates.CommitBack;
+				}
+
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+
+			CASE (FramerStates.CommitBack) {
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType,
+						ConnectionRecordType.HEADER_SIZE, headerStagingPosition);
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType,
+						ConnectionRecordType.HEADER, headerStagingRegister);
+				SMUtils.assignField(connectionRecordWriteBack.next,
+						connectionRecordType, ConnectionRecordType.LAST_RX_POS, lastRxPos);
+				SMUtils.assignField(connectionRecordWriteBack.next,
+						connectionRecordType, ConnectionRecordType.CONNECTION_ERROR, errorCode !== FramerErrorCodes.NoError.ordinal());
+
+
+				SMUtils.assignField(connectionRecordWriteBack.next, connectionRecordType, ConnectionRecordType.LEVEL,
+						levelReg.cast(rLevel.getType()));
+
+				connectionRecordWriteBackEnable.next <== true;
+				currentState.next <== FramerStates.WaitEvent;
+				printf("currentState: %s -> %s\n", currentState, currentState.next);
+			}
+		}
+	}
+
+	private DFEsmValue pad(DFEsmValue v, int toBits) {
+		int vWidth = v.getType().getTotalBits();
+		if (vWidth < toBits) {
+			return constant.value(dfeUInt(toBits - vWidth), 0) # v;
+		}
+
+		return v;
+	}
+
+	private void doRequest() {
+		int sizeBits = tcpRawType.getRxRequestType().getTypeForField(RxRequestType.SIZE).getTotalBits();
+
+		SMUtils.assignField(requestCmd.next, tcpRawType.getRxRequestType(),
+				RxRequestType.SIZE,
+				bytesNeeded.cast(dfeUInt(sizeBits)));
+
+		IF (~stalling) {
+			rxDataTimeout.next <== rxDataTimeout + 1;
+			IF (requestedBytesCounter < bytesNeeded) {
+				requestCmdValid.next <== true;
+				requestedBytesCounter.next <== bytesNeeded;
+				printf("doRequest: Pushing out request for %d bytes\n", bytesNeeded);
+			}
+		}
+
+		IF (rxDataRegValid) {
+			rxDataTimeout.next <== 0;
+		}
+	}
+
+	private void shiftAndLatch(DFEsmValue valid, DFEsmValue data, DFEsmStateValue target, DFEsmValue pos) {
+		final int dataSizeBits = data.getType().getTotalBits();
+		final int dataSizeBytes = dataSizeBits / 8;
+
+		final int targetSizeBits = target.getType().getTotalBits();
+		final int targetSizeBytes = targetSizeBits / 8;
+
+		if (targetSizeBytes % dataSizeBytes != 0)
+			throw new MaxCompilerAPIError("Target size in bytes (%d) must be an integer multiple of the data size (%d)\n",
+					targetSizeBytes, dataSizeBytes);
+
+
+		final DFEsmValueType posType = pos.getType();
+//		final int elementsToAddress = Math.max(dataSizeBytes, targetSizeBytes);
+//		if (posType.getTotalBits() != MathUtils.bitsToAddress(elementsToAddress))
+//			throw new MaxCompilerAPIError("pos type must be %d bits, to address %d bytes.", posType.getTotalBits(), elementsToAddress);
+
+		for (int p=0; p < targetSizeBytes; p++) {
+			IF (valid & pos === constant.value(posType, p)) {
+				target.next[SMUtils.B(Math.min(dataSizeBytes+p, targetSizeBytes))-1:SMUtils.B(p)]
+				            <==	data[SMUtils.B(Math.min(targetSizeBytes-p, dataSizeBytes))-1:0];
+			}
+		}
+	}
+
+	@Override
+	protected void outputFunction() {
+		rxEvents.read <== false;
+		SWITCH (currentState) {
+			CASE (FramerStates.WaitEvent) {
+				IF (~rxEvents.empty) {
+					rxEvents.read <== true;
+				}
+			}
+		}
+
+		DFEsmAssignableValue eoSocketID = assignable.value(dfeUInt(eventStruct.getTypeForField(EventStruct.SOCKET_ID).getTotalBits()));
+		DFEsmAssignableValue eoIsConnEvent = assignable.value(dfeUInt(eventStruct.getTypeForField(EventStruct.IS_CONN_EVENT).getTotalBits()));
+		DFEsmAssignableValue eoData = assignable.value(dfeUInt(eventStruct.getTypeForField(EventStruct.DATA).getTotalBits()));
+
+		IF (rxDataEvents.valid) {
+			eoData <== 		SMUtils.extractField(rxDataEvents, tcpRawType.getEventType(), EventType.SIZE).cast(eoData.getType());
+			eoSocketID <== 	SMUtils.extractField(rxDataEvents, tcpRawType.getEventType(), EventType.SOCKET);
+			eoIsConnEvent <== false;
+		} ELSE IF (rxSimulatneousEvent_r) {
+			eoData <== 		SMUtils.extractField(rxConnStateEvent_r, tcpRawType.getConnStateEventType(), ConnStateEventType.STATE).cast(eoData.getType());
+			eoSocketID <== 	SMUtils.extractField(rxConnStateEvent_r, tcpRawType.getConnStateEventType(), ConnStateEventType.SOCKET);
+			eoIsConnEvent <== true;
+		} ELSE {
+			eoData <== 		SMUtils.extractField(rxConnStateEvents, tcpRawType.getConnStateEventType(), ConnStateEventType.STATE).cast(eoData.getType());
+			eoSocketID <== 	SMUtils.extractField(rxConnStateEvents, tcpRawType.getConnStateEventType(), ConnStateEventType.SOCKET);
+			eoIsConnEvent <== true;
+		}
+
+		rxEventsOutput.valid <== rxDataEvents.valid | rxConnStateEvents_valid | rxSimulatneousEvent_r;
+		rxEventsOutput <== eoData # eoIsConnEvent # eoSocketID;
+
+		if (TCPFramerConstants.enableDebugStreams) {
+			debugStream.valid <== debugRegValid;
+			debugStream <== debugReg;
+		}
+
+
+		rxRequest <== requestCmd;
+		rxRequest.valid <== requestCmdValid;
+
+		rxDataEvents.stall <== false;
+		rxConnStateEvents.stall <== false;
+		rxDataInput.stall <== false;
+
+		output <== outputBuffer.output.dataOut;
+		output.almostEmpty <== outputBuffer.output.progEmpty;
+		output.empty <== outputBuffer.output.empty;
+		debugger.output();
+
+		IF (outputRegValid) {
+			printf("Output [sof=%d] [eof=%d] [mod = %d] [Error = %d] [state_valid=%d, state=%d] [contains_data=%d] [isPassThrough=%d] data=0x%x -- ",
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.SOF),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.EOF),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.MOD),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.ERROR_CODE),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONNECTION_STATE_VALID),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONNECTION_STATE),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.CONTAINS_DATA),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.IS_PASS_THROUGH),
+					SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA));
+
+			printString(SMUtils.extractField(outputReg, fixFramerLinkType.getDFEStructType(), TCPFramerLinkType.DATA));
+		}
+
+		DFEsmAssignableValue scalar_currentState_assignable = assignable.value(scalar_currentState.getType());
+		scalar_currentState_assignable <== constant.value(scalar_currentState.getType(), 0);
+		for (FramerStates s : FramerStates.values()) {
+			IF (currentState === s) {
+				scalar_currentState_assignable <== s.ordinal();
+			}
+		}
+
+		scalar_currentState <== scalar_currentState_assignable;
+
+		scalar_countTimeouts <== countTimeouts;
+
+		if (TCPFramerConstants.enableDebug) {
+			scalar_bytesNeeded <== bytesNeeded;
+			scalar_rxBytesCounter <== rxBytesCounter;
+			scalar_recordAddress <== recordAddress;
+			scalar_levelReg <== levelReg.cast(dfeUInt(levelReg.getType().getTotalBits()));
+			scalar_totalMessageStringLength <== totalMessageLength;
+			scalar_lengthGood <== lengthSanityGood;
+			scalar_headerSigGood <== headerSigGood;
+			scalar_stalling <== stalling;
+
+			scalar_outputBufferEmpty <== outputBufferEmpty;
+			scalar_countSimultaneousEvents <== countSimultaneousEvent_r;
+			scalar_seenConsecutiveSimultaneousEvents <== seenConsecutiveSimultaneousEvents_r;
+		}
+	}
+
+	@Override
+	public void printString(DFEsmValue v) {
+		if (TCPFramerConstants.enableDebugPrints) {
+			for (int i=0; i < v.getType().getTotalBits() / 8; i++) {
+				for (char c=43; c < 127; c ++) {
+					IF (SMUtils.extractByte(v, i) === c) debug.simPrintf(String.valueOf(c));
+				}
+				IF (SMUtils.extractByte(v, i) === 1) debug.simPrintf("|");
+				ELSE IF (SMUtils.extractByte(v, i) < 43 | SMUtils.extractByte(v, i) >= 127) debug.simPrintf(".");
+			}
+			debug.simPrintf("\n");
+		}
+	}
+
+	@Override
+	public void printf(String sub, DFEsmStateEnum<?> currentStateSub, String format, Object ... args) {
+//		debug.simPrintf("%StateMachine%." + sub + ": [cycle %d] [timer %d] [%s] [frame %d]: ", cycleCounter, rxDataTimeout, currentStateSub, frameCounter);
+//		debug.simPrintf(format, args);
+	}
+
+	public void printf(String format, Object ... args) {
+		if (TCPFramerConstants.enableDebugPrints) {
+			debug.simPrintf("%StateMachine%: [cycle %d] [timer %d] [%s] [frame %d]: ", cycleCounter, rxDataTimeout, currentState, frameCounter);
+			debug.simPrintf(format, args);
+		}
+	}
+
+	@Override
+	public StateMachineLib getOwner() {
+		return this;
+	}
+
+	public DFEsmStateEnum<FramerStates> getCurrentState() {
+		return currentState;
+	}
+}
