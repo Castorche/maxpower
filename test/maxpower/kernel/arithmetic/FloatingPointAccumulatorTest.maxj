@@ -10,6 +10,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
@@ -22,12 +24,17 @@ public class FloatingPointAccumulatorTest {
 			super(parameters);
 			DFEVar isOut   = everyCycle ? constant.var(true) : control.count.simpleCounter(32, numVals) === numVals - 1;
 			DFEVar summand = io.input("summand", type);
+			DFEVector<DFEVector<DFEVar>> asVector = (new DFEVectorType<DFEVector<DFEVar>>(
+					                                 new DFEVectorType<DFEVar>(type, 1),
+					                                 1)).newInstance(this);
+			asVector[0][0] <== summand;
 			DFEVar sum;
 			if (hasReset) {
 				DFEVar reset = control.count.simpleCounter(32, numVals) === 0;
-				sum = FloatingPointAccumulator.accumulateWithReset(summand, constant.var(true), reset, everyCycle);
+				sum = FloatingPointAccumulator.accumulateWithReset(asVector, constant.var(true), reset, everyCycle);
 			} else {
-				sum = FloatingPointAccumulator.accumulateFixedLength(summand, numVals, everyCycle);
+				System.out.println("Is fixed length.");
+				sum = FloatingPointAccumulator.accumulateFixedLength(asVector, numVals, everyCycle);
 			}
 
 			io.output("sum", type, isOut) <== sum;
