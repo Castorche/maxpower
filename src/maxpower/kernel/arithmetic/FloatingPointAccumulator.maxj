@@ -25,9 +25,6 @@ public class FloatingPointAccumulator {
 	/*
 	 * The following code is only valid for Maxeler DFEs up to and including MAX4 (Coria, Vectis, Isca and Galava).
 	 * When MAX5 is released it will need to be revisited.
-	 * Generally the following will return 16, but with a large enough squash factor we can get it down to 8.
-	 * The option useSuperSquash will push the appropriate squash factor to get 8. This will save an addition
-	 * in the adder tree, but may cause timing problems, so is off by default.
 	 */
 	private static int getLatency(DFEVar summand) {
 		int latency;
@@ -52,7 +49,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This class accumulates any number of things, but only gives the correct result on the final cycle of accumulation.
+	 * Accumulate any number of things, but only getting the correct result on the final cycle of accumulation.
 	 * The cost of this is roughly the same as two floating point additions.
 	 * @author stephen
 	 *
@@ -112,7 +109,7 @@ public class FloatingPointAccumulator {
 
 
 		/**
-		 * This creates a floating point accumulator that gives the correct result only on the final cycle.
+		 * Create a floating point accumulator that gives the correct result only on the final cycle.
 		 * @param owner The kernel or kernel lib this belongs to (this).
 		 * @param summand The DFEFloat input we wish to sum.
 		 * @param enable A DFEBool enable signal for the accumulator. When it is false we ignore the input.
@@ -150,7 +147,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This class accumulates any number of things and gives the correct result on every cycle.
+	 * Accumulates any number of things and get the correct result on every cycle.
 	 * The cost of this depends on the pipelining factor, but will typically cost 5 additions.
 	 * @author stephen
 	 *
@@ -159,7 +156,7 @@ public class FloatingPointAccumulator {
 		public final DFEVar sum;
 
 		/**
-		 * This creates a floating point accumulator that gives the correct result on every cycle.
+		 * Create a floating point accumulator that gives the correct result on every cycle.
 		 * @param owner The kernel or kernel lib this belongs to (this).
 		 * @param summand The DFEFloat input we wish to sum.
 		 * @param enable A DFEBool enable signal for the accumulator. When it is false we ignore the input.
@@ -243,7 +240,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This class accumulates a (small) fixed number of things and gives the correct result on every cycle.
+	 * Accumulate a (small) fixed number of things and get the correct result on every cycle.
 	 * The cost of this is a single addition plus buffering. For a small number of things, the buffer will
 	 * be cheap, so this will be cheaper than the other 2 options.
 	 * @author stephen
@@ -253,7 +250,7 @@ public class FloatingPointAccumulator {
 		public final DFEVar sum;
 
 		/**
-		 * This creates a floating point accumulator that gives the correct result on every cycle.
+		 * Creates a floating point accumulator that gives the correct result on every cycle.
 		 * @param summand The DFEFloat input we wish to sum.
 		 * @param numVals The number of values we wish to accumulate.
 		 */
@@ -317,7 +314,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware. If it is false then the correct value only comes out after numVals
 	 * enabled cycles, and numVals needs to be at least ~15 (depending on pipelining factor).
@@ -326,7 +323,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static <T extends KernelObjectVectorizable<T,?>>
 	DFEVar accumulateFixedLength(T summand, DFEVar enable, DFEVar numVals, boolean correctOnEveryCycle) {
@@ -335,7 +331,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware. If it is false then the correct value only comes out after numVals
 	 * enabled cycles, and numVals needs to be at least ~15 (depending on pipelining factor).
@@ -344,7 +340,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static DFEVar accumulateFixedLength(List<DFEVar> summand, DFEVar enable, DFEVar numVals, boolean correctOnEveryCycle) {
 		DFEVar singleInput = adderTree(summand);
@@ -361,7 +356,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware. If it is false then the correct value only comes out after numVals
 	 * enabled cycles, and numVals needs to be at least ~15 (depending on pipelining factor).
@@ -370,7 +365,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static <T extends KernelObjectVectorizable<T,?>>
 	DFEVar accumulateFixedLength(T summand, DFEVar enable, int numVals, boolean correctOnEveryCycle) {
@@ -379,7 +373,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware. If it is false then the correct value only comes out after numVals
 	 * enabled cycles, and numVals needs to be at least ~15 (depending on pipelining factor).
@@ -388,7 +382,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static DFEVar accumulateFixedLength(List<DFEVar> summand, DFEVar enable, int numVals, boolean correctOnEveryCycle) {
 		Kernel k = summand[0].getKernel();
@@ -397,7 +390,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware unless numVals is very small. If it is false then the correct value
 	 * only comes out after numVals enabled cycles (unless numVals is very small).
@@ -405,7 +398,6 @@ public class FloatingPointAccumulator {
 	 * @param summand	Values to accumulate
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static <T extends KernelObjectVectorizable<T,?>>
 	DFEVar accumulateFixedLength(T summand, int numVals, boolean correctOnEveryCycle) {
@@ -414,7 +406,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates a fixed number of floating point values.
+	 * Accumulate a fixed number of floating point values.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and numVals can take any value, but
 	 * it is significantly more expensive in hardware unless numVals is very small. If it is false then the correct value
 	 * only comes out after numVals enabled cycles (unless numVals is very small).
@@ -422,7 +414,6 @@ public class FloatingPointAccumulator {
 	 * @param summand	Values to accumulate
 	 * @param numVals	The number of enabled cycles to run for before resetting. I.e. the number of elements in the sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only after numVals cycles.
-	 * @return
 	 */
 	public static DFEVar accumulateFixedLength(List<DFEVar> summand, int numVals, boolean correctOnEveryCycle) {
 		DFEVar sum;
@@ -442,7 +433,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates floating point values until asked to reset.
+	 * Accumulate floating point values until asked to reset.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and reset can happen at any time,
 	 * but it is significantly more expensive in hardware. If it is false then the correct value only comes out on the
 	 * cycle just before the reset, and resets must be at least ~15 cycles apart (depending on pipelining factor).
@@ -451,7 +442,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param reset	    When to reset the accumulator to begin a new sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only just before reset.
-	 * @return
 	 */
 	public static <T extends KernelObjectVectorizable<T,?>>
 	DFEVar accumulateWithReset(T summand, DFEVar enable, DFEVar reset, boolean correctOnEveryCycle) {
@@ -460,7 +450,7 @@ public class FloatingPointAccumulator {
 
 
 	/**
-	 * This function accumulates floating point values until asked to reset.
+	 * Accumulate floating point values until asked to reset.
 	 * If correctOnEveryCycle is true then the output will be correct on every cycle, and reset can happen at any time,
 	 * but it is significantly more expensive in hardware. If it is false then the correct value only comes out on the
 	 * cycle just before the reset, and resets must be at least ~15 cycles apart (depending on pipelining factor).
@@ -469,7 +459,6 @@ public class FloatingPointAccumulator {
 	 * @param enable	Ignore summand when this is false
 	 * @param reset	    When to reset the accumulator to begin a new sum.
 	 * @param correctOnEveryCycle Does the output need to be correct on every cycle, or only just before reset.
-	 * @return
 	 */
 	public static DFEVar accumulateWithReset(List<DFEVar> summand, DFEVar enable, DFEVar reset, boolean correctOnEveryCycle) {
 		DFEVar singleInput = adderTree(summand);
