@@ -1,0 +1,141 @@
+package maxpower.kernel.arithmetic;
+
+import static org.junit.Assert.assertTrue;
+
+import java.util.Random;
+
+import org.junit.Test;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.managers.standard.SimulationManager;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class FloatingPointAccumulatorTest {
+
+	private static int numRuns = 23;
+
+	private class FPATestKernel extends Kernel {
+		FPATestKernel(KernelParameters parameters, DFEFloat type, int numVals, boolean everyCycle, boolean hasReset) {
+			super(parameters);
+			DFEVar isOut   = everyCycle ? constant.var(true) : control.count.simpleCounter(32, numVals) === numVals - 1;
+			DFEVar summand = io.input("summand", type);
+			DFEVector<DFEVector<DFEVar>> asVector = (new DFEVectorType<DFEVector<DFEVar>>(
+					                                 new DFEVectorType<DFEVar>(type, 1),
+					                                 1)).newInstance(this);
+			asVector[0][0] <== summand;
+			DFEVar sum;
+			if (hasReset) {
+				DFEVar reset = control.count.simpleCounter(32, numVals) === 0;
+				sum = FloatingPointAccumulator.accumulateWithReset(asVector, constant.var(true), reset, everyCycle);
+			} else {
+				System.out.println("Is fixed length.");
+				sum = FloatingPointAccumulator.accumulateFixedLength(asVector, numVals, everyCycle);
+			}
+
+			io.output("sum", type, isOut) <== sum;
+		}
+	}
+
+	private class FPATestData {
+		final double input[];
+		final double expected[];
+		final int numCycles;
+		final int numOutputs;
+		FPATestData(int numVals, boolean everyCycle) {
+			numCycles = numVals * numRuns;
+			long seed = System.currentTimeMillis();
+			System.out.println("Using seed " + seed);
+			Random rand = new Random(seed);
+			numOutputs = everyCycle ? numRuns * numVals : numRuns;
+
+			input    = new double[numRuns * numVals];
+			expected = new double[numOutputs];
+			for(int r = 0; r < numRuns; r++) {
+				double sum = 0;
+				for(int i = 0; i < numVals; i++) {
+					// use Math.exp twice to ensure we have a nice spread of values (with varied exponents)
+					input[r * numVals + i] = Math.exp(Math.exp(rand.nextDouble()));
+					sum += input[r * numVals + i];
+					if (everyCycle) {
+						expected[r * numVals + i] = sum;
+					} else {
+						expected[r] = sum;
+					}
+				}
+			}
+		}
+
+		double getUlpValue(DFEFloat type) {
+			return Math.pow(2.0, 1 - type.getMantissaBits());
+		}
+
+		boolean checkOutput(double hwSum[], DFEFloat type) {
+			double ulp = getUlpValue(type);
+			int numVals = input.length / numRuns;
+			//The following maximum error assumes that we only get ~1 ULP per addition due to the reordering.
+			//This would be fine if they were mostly in the same range, but they are not, so the reordering
+			//could cause problems. On the other hand, at least they are all positive, so we should be ok.
+			double maxError = ulp * MathUtils.ceilLog2(numVals);
+			if (type.getMantissaBits() >= 53) {//golden data only computed in double, so error may be larger
+				maxError = getUlpValue(Kernel.dfeFloat(11,53)) * MathUtils.ceilLog2(numVals) * 2;
+			}
+			if (numOutputs != hwSum.length) {
+				System.out.println("Output the wrong length. Expected " + numOutputs + ", got " + hwSum.length);
+			}
+			for(int i = 0; i < numOutputs; i++) {
+				double error = Math.abs(expected[i] - hwSum[i]) / expected[i];
+				System.out.printf("expected sum %22.16g\t\thw sum %22.16g\t\trelative error %g\t\t1 ulp %g\n",
+						expected[i], hwSum[i], error, ulp);
+				if(error > maxError) {
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+
+	@Test public void test_variable_length_11_53()       { test(Kernel.dfeFloat(11, 53), 999, false, false); }
+	@Test public void test_variable_length_7_41()        { test(Kernel.dfeFloat( 7, 41), 999, false, false); }
+	@Test public void test_variable_length_8_24()        { test(Kernel.dfeFloat( 8, 24), 999, false, false); }
+
+	@Test public void test_dynamic_length_11_53()        { test(Kernel.dfeFloat(11, 53), 999, true,  false); }
+	@Test public void test_dynamic_length_7_41()         { test(Kernel.dfeFloat( 7, 41), 999, true,  false); }
+	@Test public void test_dynamic_length_8_24()         { test(Kernel.dfeFloat( 8, 24), 999, true,  false); }
+
+	@Test public void test_variable_length_11_53_short() { test(Kernel.dfeFloat(11, 53),   6, false, false); }
+	@Test public void test_variable_length_7_41_short()  { test(Kernel.dfeFloat( 7, 41),   6, false, false); }
+	@Test public void test_variable_length_8_24_short()  { test(Kernel.dfeFloat( 8, 24),   6, false, false); }
+
+	@Test public void test_dynamic_length_11_53_short()  { test(Kernel.dfeFloat(11, 53),   6, true,  false); }
+	@Test public void test_dynamic_length_7_41_short()   { test(Kernel.dfeFloat( 7, 41),   6, true,  false); }
+	@Test public void test_dynamic_length_8_24_short()   { test(Kernel.dfeFloat( 8, 24),   6, true,  false); }
+
+	@Test public void test_variable_reset_11_53()        { test(Kernel.dfeFloat(11, 53),  30, false, true); }
+	@Test public void test_variable_reset_7_41()         { test(Kernel.dfeFloat( 7, 41),  30, false, true); }
+	@Test public void test_variable_reset_8_24()         { test(Kernel.dfeFloat( 8, 24),  30, false, true); }
+
+	@Test public void test_dynamic_reset_11_53()         { test(Kernel.dfeFloat(11, 53),  30, true,  true); }
+	@Test public void test_dynamic_reset_7_41()          { test(Kernel.dfeFloat( 7, 41),  30, true,  true); }
+	@Test public void test_dynamic_reset_8_24()          { test(Kernel.dfeFloat( 8, 24),  30, true,  true); }
+
+	private void test(DFEFloat type, int numVals, boolean everyCycle, boolean hasReset) {
+		SimulationManager mgr = new SimulationManager("FloatingPointAccumulatorTest");
+
+		FPATestKernel kernel = new FPATestKernel(mgr.makeKernelParameters(), type, numVals, everyCycle, hasReset);
+		mgr.setKernel(kernel);
+
+		FPATestData data = new FPATestData(numVals, everyCycle);
+
+		mgr.setInputData("summand", data.input);
+		mgr.setKernelCycles(data.numCycles);
+
+		mgr.runTest();
+
+		assertTrue(data.checkOutput(mgr.getOutputDataArray("sum"), type));
+	}
+}
