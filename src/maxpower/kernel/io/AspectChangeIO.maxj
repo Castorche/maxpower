@@ -13,9 +13,8 @@ import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
 import com.maxeler.maxcompiler.v2.utils.MathUtils;
 
 /**
- * This class is here to provide input and output functions just like the {@link com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO IO} class.
- * The difference here is that when you create an input or an output port you can specify the width of that port and thus take care of the required
- * aspect change inside the kernel, rather than leaving it to the manager.
+ * A way to create inputs and outputs just like {@link com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.IO IO}, except that you can specify the
+ * width of that port and the required aspect change is done inside the kernel, rather than leaving it to the manager.
  * <p>
  * This can be useful for if you want to save the BRAMs used by the extra FIFO added after the aspect change in the manager, but the far more useful
  * case is when you want to do a non-multiple aspect change, where the manager will do a very inefficient job.
@@ -51,7 +50,7 @@ public class AspectChangeIO extends KernelLib {
 
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes inside the kernel.
+	 * Create an output just like io.output, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param outputType The type of the data you wish to output.
@@ -62,7 +61,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes inside the kernel.
+	 * Create an output just like io.output, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param outputType The type of the data you wish to output.
@@ -74,7 +73,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes and padding removal inside the kernel.
+	 * Create an output just like io.output, but with the required aspect change and padding done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param outputType The type of the data you wish to output.
@@ -89,7 +88,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes inside the kernel.
+	 * Create an output just like io.output, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param output The data you wish to output.
@@ -99,7 +98,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes inside the kernel.
+	 * Create an output just like io.output, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param output The data you wish to output.
@@ -110,7 +109,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.output, but does the required aspect changes and padding removal inside the kernel.
+	 * Create an output just like io.output, but with the required aspect change and padding done inside the kernel.
 	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the output port (how it is referred to in the manager).
 	 * @param output The data you wish to output.
@@ -151,7 +150,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * Create an input just like io.input, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
@@ -162,7 +161,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * Create an input just like io.input, but with the required aspect changes done inside the kernel.
 	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
@@ -174,7 +173,7 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * Create an input just like io.input, but with the required aspect change and padding removal done inside the kernel.
 	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
