@@ -136,7 +136,7 @@ public class AspectChangeIO extends KernelLib {
 			final DataWithEnable changedOutput = removeOutputMultiples(new DataWithEnable(output.pack(), enable), multiple, flush);
 			io.output(name, changedOutput.data, changedOutput.data.getType(), changedOutput.enable);
 		} else {
-	        final int inputRatio = typeWidth / hcf;
+			final int inputRatio = typeWidth / hcf;
 			final int outputRatio = m_portWidth / (multiple * hcf);
 
 			// perform the non-multiple aspect change, e.g. 3 to 4, 4 to 5, etc
@@ -151,8 +151,8 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.input, but does the required aspect changes inside the kernel.
-	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
+	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
 	 * @return The input data you asked for.
@@ -162,8 +162,8 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.input, but does the required aspect changes inside the kernel.
-	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
+	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
 	 * @param enable The enable signal for the input (when you are ready to receive more data).
@@ -174,8 +174,8 @@ public class AspectChangeIO extends KernelLib {
 	}
 
 	/**
-	 * This method creates an output just like io.input, but does the required aspect changes inside the kernel.
-	 * @param <T> The type of the output (DFEVar, DFEVector, DFEStruct).
+	 * This method creates an input just like io.input, but does the required aspect changes inside the kernel.
+	 * @param <T> The type of the input (DFEVar, DFEVector, DFEStruct).
 	 * @param name The name of the input port (how it is referred to in the manager).
 	 * @param inputType The type of the input data.
 	 * @param enable The enable signal for the input (when you are ready to receive more data).
@@ -225,7 +225,7 @@ public class AspectChangeIO extends KernelLib {
 		final DFEVector<DFEVar> output        = trimArray(rotatedOutput, outputRatio);
 
 		// Note: this streamHold is optimised away if enable is constant.var(true)
-		// We only need to streamHold up to outputRatio-1 elements of the KArray output
+		// We only need to streamHold up to outputRatio-1 elements of the DFEVector output
 		return inputType.unpack(partialStreamHold(output, enable, outputRatio-1).pack());
 	}
 
@@ -239,13 +239,13 @@ public class AspectChangeIO extends KernelLib {
 			this.enable = enable;
 			extraData = null;
 			extraEnable = null;
-        }
+		}
 		protected DataWithEnable(DFEVar data, DFEVar enable, DFEVar extraData, DFEVar extraEnable) {
 			this.data = data;
 			this.enable = enable;
 			this.extraData = extraData;
 			this.extraEnable = extraEnable;
-        }
+		}
 	}
 
 	private DataWithEnable exactMultipleCounter(final int maximum, final DFEVar enable, final boolean isInput, final DFEVar resetEverything) {
