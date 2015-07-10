@@ -1,5 +1,6 @@
 package maxpower.kernel.arithmetic;
 
+import static com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory.dfeFloat;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -10,7 +11,6 @@ import org.junit.Test;
 import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
 import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEFloat;
-import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFETypeFactory;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
 import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
@@ -19,46 +19,41 @@ import com.maxeler.maxcompiler.v2.utils.Bits;
 
 public class FloatingPointMultiAdderTest {
 	private static final int N = 100; // length of test input data
-	private static final DFEFloat type = DFETypeFactory.dfeFloat(7, 7);
-	private static final double errorThreshold = 2.0 / (1 << type.getMantissaBits());
 
 	static class FPMATestKernel extends Kernel {
-		protected FPMATestKernel(KernelParameters parameters, int numOperands, FloatingPointMultiAdder.Optimization[] preferences) {
+		protected FPMATestKernel(KernelParameters parameters, DFEFloat type, int numOperands, int numGuardBits) {
 			super(parameters);
 
 			DFEVectorType<DFEVar> arrayType = new DFEVectorType<DFEVar>(type, numOperands);
 			DFEVector<DFEVar> input = io.input("input", arrayType);
 
-			FloatingPointMultiAdder fpma = new FloatingPointMultiAdder(this, 13, true, preferences);
-			io.output("fpma_out", type) <== fpma.compute(input.getElementsAsList().toArray(new DFEVar[0]));
+			io.output("fpma_out", type) <== FloatingPointMultiAdder.add(numGuardBits, input.getElementsAsList());
 		}
 	}
 
 	@Test
-	public void testSimTriAdder() {
-		runTest(13, FloatingPointMultiAdder.Optimization.TRI_ADDER);
+	public void testFloat7_7_13() {
+		runTest(dfeFloat(7, 7), 13, 13);
 	}
 
 	@Test
-	public void testSimCondAddSub() {
-		runTest(17, FloatingPointMultiAdder.Optimization.COND_ADD_SUB);
+	public void testFloat7_7_17() {
+		runTest(dfeFloat(7, 7), 17, 13);
 	}
 
 	@Test
-	public void testSimSequential() {
-		runTest(19, FloatingPointMultiAdder.Optimization.SEQUENTIAL);
+	public void testSingle_23() {
+		runTest(dfeFloat(8, 24), 17, 13);
 	}
 
 	@Test
-	public void testSimNone() {
-		runTest(23, FloatingPointMultiAdder.Optimization.NONE);
+	public void testDouble_47() {
+		runTest(dfeFloat(11, 53), 47, 13);
 	}
 
-	private void runTest(int numOperands, FloatingPointMultiAdder.Optimization opt) {
-		FloatingPointMultiAdder.Optimization[] preferences = new FloatingPointMultiAdder.Optimization[] { opt };
-
+	private void runTest(DFEFloat type, int numOperands, int numGuardBits) {
 		SimulationManager m = new SimulationManager("FloatingPointMultiAdderTest");
-		m.setKernel(new FPMATestKernel(m.makeKernelParameters(), numOperands, preferences));
+		m.setKernel(new FPMATestKernel(m.makeKernelParameters(), type, numOperands, numGuardBits));
 
 		List<Double> elements = new ArrayList<Double>();
 
@@ -130,14 +125,14 @@ public class FloatingPointMultiAdderTest {
 		m.setKernelCycles(numCycles);
 		m.runTest();
 
-		double[] fpmaActual = m.getOutputDataArray("fpma_out");
+		double[] actual = m.getOutputDataArray("fpma_out");
 
 		for (int i = 0; i < numCycles; i++) {
-			myAssertEquals(i, expected[i] , fpmaActual[i], maxAbs[i]);
+			myAssertEquals(i, expected[i] , actual[i], maxAbs[i], 2.0 / (1 << type.getMantissaBits()));
 		}
 	}
 
-	private static void myAssertEquals(int idx, double expected, double actual, double maxAbs) {
+	private static void myAssertEquals(int idx, double expected, double actual, double maxAbs, double errorThreshold) {
 		double absDiff = Math.abs(expected - actual);
 		double relDiff = absDiff / Math.max(maxAbs, expected);
 
