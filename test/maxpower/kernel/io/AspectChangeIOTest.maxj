@@ -1,0 +1,191 @@
+package maxpower.kernel.io;
+
+import static org.junit.Assert.assertEquals;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.junit.Test;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelLib;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.managers.standard._SimulationManager;
+import com.maxeler.maxcompiler.v2.utils.Bits;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+public class AspectChangeIOTest {
+
+	private static final int ITERATIONS = 10;
+
+	private class TestData {
+		private final Double [] data;
+		private final Double [] goldenOutput;
+		private final int       inputWidth;
+		private final int       outputWidth;
+		private final boolean   hasInputPadding;
+		private final boolean   hasOutputPadding;
+		private final int       length;
+
+		protected TestData(int inputWidth, int outputWidth, boolean hasPadding, int enableFrequency) {
+			hasInputPadding  = hasPadding && inputWidth > outputWidth;
+			hasOutputPadding = hasPadding && inputWidth < outputWidth;
+			final int padding = Math.min(inputWidth, outputWidth);
+			this.length = inputWidth * outputWidth - (hasPadding ? padding : 0);
+			final int length = this.length * ITERATIONS;
+			data = new Double[length];
+			for (int i = 0; i < data.length; i++) {
+				data[i] = i * 1.0;
+			}
+			if (inputWidth >= outputWidth) {
+				goldenOutput = new Double[enableFrequency * length];
+				for (int i = 0; i < enableFrequency * length / outputWidth; i++) {
+					for (int j = 0; j < outputWidth; j++) {
+						goldenOutput[i*outputWidth + j] = data[(i/enableFrequency)*outputWidth + j];
+					}
+				}
+			} else {
+				goldenOutput = data;
+			}
+			this.inputWidth = inputWidth;
+			this.outputWidth = outputWidth;
+		}
+
+		protected List<Bits> encodeInput(DFEType dataType) {
+			final List<Bits> encodedData = new ArrayList<Bits>(MathUtils.ceilDivide(data.length, inputWidth));
+			final DFEVectorType<DFEVar> vectorType = new DFEVectorType<DFEVar>(dataType, inputWidth);
+			int index = 0;
+			for (int i = 0; i < ITERATIONS; i++) {
+				for (int j = 0; j < (hasOutputPadding ? outputWidth - 1 : outputWidth); j++) {
+					final double[] vector = new double[inputWidth];
+					for (int k = 0; k < vector.length; k++) {
+						//add padding to the input if required
+						if (!hasInputPadding || j < outputWidth - 1 || k < inputWidth - outputWidth) {
+							index++;
+						}
+						vector[k] = data[index - 1];
+					}
+					encodedData.add(vectorType.encodeConstant(vector));
+				}
+			}
+			return encodedData;
+		}
+
+		protected Double[] decodeOutput(List<Bits> input, DFEType dataType) {
+			Double[] output = new Double[length * ITERATIONS];
+			int paddingFrequency = MathUtils.ceilDivide(length, outputWidth);
+			int paddingSize = paddingFrequency * outputWidth - length;
+			int index = 0;
+			for (int i = 0; i < input.size(); i++) {
+				DFEVectorType<DFEVar> arrayType = new DFEVectorType<DFEVar>(dataType, outputWidth);
+				@SuppressWarnings("unchecked")
+				List<Double> chunk = arrayType.decodeConstant(input[i]);
+				for (int j = 0; j < outputWidth; j++) {
+					//if it has padding on the output, then strip it out.
+					if (!hasOutputPadding || j < outputWidth - paddingSize || (i % paddingFrequency) != (paddingFrequency - 1)) {
+						if (index < output.length) {
+							output[index] = chunk[j];
+						}
+						index++;
+					}
+				}
+			}
+
+			return output;
+		}
+
+		protected Double[] getGoldenOuput() {
+			return goldenOutput;
+		}
+
+		protected int getRunCycles() {
+			return MathUtils.ceilDivide(data.length, Math.min(inputWidth, outputWidth));
+		}
+
+		public int getLength() {
+			return length;
+		}
+	}
+
+	private class ACIOIoTestKernel extends Kernel {
+		protected ACIOIoTestKernel(KernelParameters parameters, DFEType type, int inputWidth, int outputWidth, int enableFrequency) {
+			super(parameters);
+			final DFEVar enable = enableFrequency > 1 ? control.count.makeCounterChain().addCounter(enableFrequency, 1) === 0 : constant.var(true);
+			final DFEVar length = io.scalarInput("length", dfeUInt(32));
+			if (inputWidth >= outputWidth) {
+				final AspectChangeIO acio = new AspectChangeIO(this, inputWidth * type.getTotalBits());
+				final DFEVectorType<DFEVar> arrayType = new DFEVectorType<DFEVar>(type, outputWidth);
+				final DFEVar resetToRemovePadding = control.count.simpleCounter(32, enableFrequency * length) === 0;
+				final DFEVector<DFEVar> input = acio.input("input", arrayType, enable, resetToRemovePadding);
+				io.output("output", input, input.getType());
+			} else {
+				final AspectChangeIO acio = new AspectChangeIO(this, outputWidth * type.getTotalBits());
+				final DFEVectorType<DFEVar> arrayType = new DFEVectorType<DFEVar>(type, inputWidth);
+				final DFEVector<DFEVar> input = io.input("input", arrayType, enable);
+
+				CounterChain chain = control.count.makeCounterChain();
+				DFEVar iteration = chain.addCounter(2, 1);
+				DFEVar cycle = chain.addCounter(enableFrequency * length, 1);
+				DFEVar paddingCycle = iteration === 0 ? enableFrequency * length - 1 : enableFrequency * length - enableFrequency;
+
+				//Note that the reset may happen on a cycle where it is not enabled. The behaviour is to reset anyway, but really people shouldn't do this.
+				final DFEVar resetToAddPadding = cycle === paddingCycle;
+				acio.output("output", input, enable, resetToAddPadding);
+			}
+		}
+	}
+
+	@Test public void testNoMultipleInput()             { testACIO( 5, 3, false, 2); }
+	@Test public void testWithMultipleInput()           { testACIO(10, 4, false, 2); }
+	@Test public void testExactMultipleInput()          { testACIO( 6, 2, false, 2); }
+
+	@Test public void testPassThrough()                 { testACIO( 2, 2, false, 2); }
+
+	@Test public void testNoMultipleOutput()            { testACIO( 3, 4, false, 2); }
+	@Test public void testWithMultipleOutput()          { testACIO( 2, 9, false, 2); }
+	@Test public void testExactMultipleOutput()         { testACIO( 1, 4, false, 2); }
+
+	@Test public void testNoMultipleInputPadding()      { testACIO( 5, 3, true,  2); }
+	@Test public void testWithMultipleInputPadding()    { testACIO(10, 4, true,  2); }
+	@Test public void testExactMultipleInputPadding()   { testACIO( 6, 2, true,  2); }
+
+	@Test public void testNoMultipleOutputPadding()     { testACIO( 3, 4, true,  2); }
+	@Test public void testWithMultipleOutputPadding()   { testACIO( 2, 9, true,  2); }
+	@Test public void testExactMultipleOutputPadding()  { testACIO( 1, 4, true,  2); }
+
+	@Test public void testNoMultipleOutputPaddingF()    { testACIO( 3, 4, true,  1); }
+	@Test public void testWithMultipleOutputPaddingF()  { testACIO( 2, 9, true,  1); }
+	@Test public void testExactMultipleOutputPaddingF() { testACIO( 1, 4, true,  1); }
+
+	private void testACIO(final int inputWidth, final int outputWidth, final boolean hasPadding, int enableFrequency) {
+		final DFEType type   = KernelLib.dfeUInt(32);
+		TestData     data   = new TestData(inputWidth, outputWidth, hasPadding, enableFrequency);
+
+		_SimulationManager m = new _SimulationManager("AspectChangeIoTest");
+		m.setKernel(new ACIOIoTestKernel(m.makeKernelParameters(), type, inputWidth, outputWidth, enableFrequency));
+		m.setKernelCycles(data.getRunCycles() * enableFrequency);
+		m.setInputDataRaw("input", data.encodeInput(type));
+		if (hasPadding) {//force input/output to add or remove padding
+			m.setScalarInput("length", data.getLength() / Math.min(inputWidth, outputWidth));
+		} else {//occasionally force anyway on the cycle we would expect to be outputting, just to make sure that works
+			m.setScalarInput("length", (ITERATIONS / 2) * data.getLength() / Math.min(inputWidth, outputWidth));
+		}
+		m.build();
+		m.run();
+
+		Double[] output = data.decodeOutput(m.getOutputDataRaw("output"), type);
+		Double[] goldenOutput = data.getGoldenOuput();
+		for (int i = 0; i < output.length; i++) {
+			System.out.println("Expected " + goldenOutput[i].intValue());
+			System.out.println("Got " + output[i].intValue());
+		}
+		for (int i = 0; i < output.length; i++) {
+			assertEquals(goldenOutput[i].intValue(), output[i].intValue());
+		}
+	}
+}
